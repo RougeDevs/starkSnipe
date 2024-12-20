@@ -3,10 +3,6 @@ use std::time::Duration;
 use provider::{Monitor, StarknetProviderError, StarknetProviderOptions};
 use reqwest::header::{HeaderMap, HeaderValue};
 use starknet::core::types::{BlockId, EventFilter, Felt};
-<<<<<<< HEAD
-=======
-use starknet::core::utils::get_selector_from_name;
->>>>>>> refs/remotes/origin/master
 use tokio::runtime::Builder;
 use url::Url;
 
@@ -15,11 +11,7 @@ mod provider;
 fn main() -> Result<(), StarknetProviderError> {
     let rt = Builder::new_multi_thread().enable_all().build().unwrap();
     rt.block_on(async {
-<<<<<<< HEAD
         let url = Url::parse("https://starknet-mainnet.infura.io/v3/edd0fd50d7d948d58c513f38e5622da2").unwrap();
-=======
-        let url = Url::parse("https://starknet-mainnet.infura.io/v3/").unwrap();
->>>>>>> refs/remotes/origin/master
         let mut headers = HeaderMap::new();
         let hex_address = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
         let address = Felt::from_hex(hex_address).unwrap();
