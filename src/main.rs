@@ -7,6 +7,7 @@ use tokio::runtime::Builder;
 use url::Url;
 
 mod provider;
+mod telegram;
 
 fn main() -> Result<(), StarknetProviderError> {
     let rt = Builder::new_multi_thread().enable_all().build().unwrap();
