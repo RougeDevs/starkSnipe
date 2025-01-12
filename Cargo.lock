@@ -1641,6 +1641,7 @@ dependencies = [
 [[package]]
 name = "kanshi"
 version = "0.1.0"
+source = "git+ssh://git@github.com/RougeDevs/kanshi.git?branch=fix%2Fintegrate-dna#ef01f2a9f34057ce44766e6fed033642161e44f3"
 dependencies = [
  "anyhow",
  "apibara-core",
