@@ -12,3 +12,7 @@ teloxide = "0.13.0"
 serde = "1.0.216"
 serde_json = "1.0.133"
 dotenv = "0.15.0"
+kanshi = { version = "0.1.0", path = "kanshi" }
+anyhow = "1.0.95"
+apibara-core = { git = "https://github.com/apibara/dna", rev = "9caa385" }
+apibara-sdk = { git = "https://github.com/apibara/dna", rev = "9caa385" }
