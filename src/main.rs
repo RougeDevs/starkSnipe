@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Ok, Result};
+use anyhow::{ Result};
 use dotenv::dotenv;
 
 use kanshi::{config::Config, dna::{EventData, IndexerService}, utils::conversions::{field_to_hex_string, field_to_string}};
@@ -8,6 +8,7 @@ use provider::{Monitor, StarknetProviderError, StarknetProviderOptions};
 use reqwest::{header::{HeaderMap, HeaderValue}, Error as ReqwestError};
 use starknet::core::types::{BlockId, EventFilter, Felt};
 use telegram::TelegramBot;
+use apibara_core::starknet::v1alpha2::{Event, FieldElement};
 use tokio::runtime::Builder;
 use url::Url;
 
@@ -95,94 +96,31 @@ fn main() -> Result<(),anyhow::Error> {
     rt.block_on(async {
         let config = Config::new().expect("Failed to load configuration");
         // Create the IndexerService instance
-        let indexer_service = IndexerService::new(config).await;
+        let mut indexer_service = IndexerService::new(config).await;
+        
 
         // Define a handler function for processing events
-        let handler = |event_data: Option<EventData>| {
-            if let Some(data) = event_data {
-                println!("\n--- Received Event ---");
-                println!("Block Number: {}", data.block_number);
-                println!("From Address: {}", data.from_address);
-                println!("Transaction Hash: {}", data.transaction_hash);
-                println!("Data: {:?}", data.data);
-                println!("-----------------------\n");
-
-                let from_address: String = field_to_hex_string(&apibara_core::starknet::v1alpha2::FieldElement::from_hex(&data.from_address).unwrap());
-                if data.data.len() >=5 {
-                    let owner = field_to_hex_string(&apibara_core::starknet::v1alpha2::FieldElement::from_hex(&data.data[0]).unwrap());
-                    let name = field_to_string(&apibara_core::starknet::v1alpha2::FieldElement::from_hex(&data.data[1]).unwrap());
-                    let symbol = field_to_string(&apibara_core::starknet::v1alpha2::FieldElement::from_hex(&data.data[2]).unwrap());
-                    
-                    let supply_low = field_to_hex_string(&apibara_core::starknet::v1alpha2::FieldElement::from_hex(&data.data[3]).unwrap());
-                    let supply_high = field_to_hex_string(&apibara_core::starknet::v1alpha2::FieldElement::from_hex(&data.data[4]).unwrap());
-                    
-                    // Convert hex strings to numbers, removing '0x' prefix
-                    let low_value = u128::from_str_radix(supply_low.trim_start_matches("0x"), 16)
-                        .unwrap_or(0);
-                    let high_value = u128::from_str_radix(supply_high.trim_start_matches("0x"), 16)
-                        .unwrap_or(0);
-
-                    // Format the number with proper decimal places (assuming 18 decimals for the token)
-                    let initial_supply = if high_value == 0 {
-                        low_value.to_string()
-                    } else {
-                        // If high part exists, combine them
-                        format!("{}{:016x}", high_value, low_value)
-                    };
-                    
-                    let memecoin_address = if data.data.len() > 5 {
-                        field_to_hex_string(&apibara_core::starknet::v1alpha2::FieldElement::from_hex(&data.data[5]).unwrap())
-                    } else {
-                        "Not provided".to_string()
-                    };
-
-                    // Create EventData struct
-                    let event_data = EventData {
-                        block_number: data.block_number,
-                        from_address,
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                        transaction_hash: "0x0".to_string(), // placeholder
-                        data: vec![
-                            owner.clone(),
-                            name.clone(),
-                            symbol.clone(),
-                            initial_supply.clone(),
-                            memecoin_address.clone(),
-                        ],
-                    };
-
-
-                    // Print formatted event information
-                    println!("\nNew Memecoin Launch Event:");
-                    println!("------------------------");
-                    println!("Block Number: {}", data.block_number);
-                    println!("Contract Address: {}",event_data.from_address);
-                    println!("Owner Address: {}", owner);
-                    println!("Name: {}", name);
-                    println!("Symbol: {}", symbol);
-                    println!("Initial Supply: {}", initial_supply);
-                    println!("Memecoin Address: {}", memecoin_address);
-                    println!("------------------------\n");
-
-                } else {
-                    println!("Warning: Event data doesn't contain expected number of fields");
-                    println!("Received data: {:?}", data.data);
+        let handler = |block_number: u64, event: &Event| {
+            // Process the event asynchronously
+            let event_arc = Arc::new(event.clone());
+            tokio::spawn(async move {
+                match handle_event(block_number,&*event_arc).await {
+                    Ok(Some(event_data)) => {
+                        println!(
+                            "Event processed successfully at block {}",
+                            event_data.block_number
+                        );
+                    }
+                    Ok(None) => println!("Event data incomplete, skipping."),
+                    Err(err) => eprintln!("Error processing event: {:?}", err),
                 }
-
-            } else {
-                eprintln!("Received empty event data");
-            }
-            
+            });
         };
-
-        // Run the indexer service with the handler
-        if let Err(err) = indexer_service.run_forever_with_handler(handler).await {
+        indexer_service = indexer_service.with_handler(handler);
+        // Run the indexer service with our handler
+        if let Err(err) = indexer_service.run_forever().await {
             eprintln!("Error while running the indexer service: {:?}", err);
         }
-
 
         Ok(())
     })
