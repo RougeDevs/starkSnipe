@@ -193,6 +193,19 @@ async fn handle_event(block_number: u64, event: &apibara_core::starknet::v1alpha
         println!("Memecoin Address: {}", memecoin_address);
         println!("------------------------\n");
 
+        tokio::spawn(async move {
+            let bot = TelegramBot::new().map_err(|e| AppError::Telegram(format!("Failed to initialise telegram bot: {}", e))).unwrap();
+            let address = memecoin_address.clone();
+            let name = name.clone();
+            let symbol = symbol.clone();
+            let text = format!(
+                "New Memecoin Launched:\n\nToken Address: {}\nName: {}\nSymbol: {}",
+                address, name, symbol
+            );
+            bot.send_message_with_buttons(6722922954, &text.clone(), None).await?;
+            Ok::<(), AppError>(())
+        });
+
         Ok(Some(event_data))
     } else {
         println!("Warning: Event data doesn't contain expected number of fields");

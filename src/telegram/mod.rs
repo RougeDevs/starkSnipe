@@ -68,33 +68,42 @@ impl  TelegramBot {
 
     pub async fn send_message_with_buttons(&self, chat_id: i64, text: &str, reply_to: Option<i64>) -> Result<(), Error> {
         let url = format!("{}/sendMessage", self.base_url);
+    
+        // Format the inline keyboard properly according to Telegram's API requirements
+        let keyboard = serde_json::json!({
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "Buy",
+                        "callback_data": "action:buy"
+                    },
+                    {
+                        "text": "Sell",
+                        "callback_data": "action:sell"
+                    }
+                ]
+            ]
+        });
 
-        let keyboard = InlineKeyboardMarkup {
-            inline_keyboard: vec![vec![
-                InlineKeyboardButton {
-                    text: "Buy".to_string(),
-                    kind: InlineKeyboardButtonKind::Callback("action:buy".to_string())
-                },
-                InlineKeyboardButton {
-                    text: "Sell".to_string(),
-                    kind: InlineKeyboardButtonKind::Callback("action:sell".to_string()),
-                }
-            ]]
-        };
-
-        let message = SendMessageRequest {
-            chat_id,
-            text: text.to_string(),
-            reply_markup: Some(keyboard),
-            reply_to_message_id: reply_to
-        };
-
-        let json_body = serde_json::to_string(&message).expect("Failed to serialize message");
-        let response = self.client.post(&url).json(&json_body).send().await?;
+        // Create the message request with the properly formatted keyboard
+        let message = serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": keyboard,
+            "reply_to_message_id": reply_to
+        });
+    
+        let response = self.client
+            .post(&url)
+            .json(&message)  // Send the JSON directly
+            .send()
+            .await?;
+    
         if !response.status().is_success() {
-            println!("Error sending message: {:?}", response.text().await?);
+            let error_text = response.text().await?;
+            eprintln!("Error sending message: {}", error_text);
         }
-
+    
         Ok(())
     }
 }
