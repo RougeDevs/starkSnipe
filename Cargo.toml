@@ -16,3 +16,4 @@ anyhow = "1.0.95"
 apibara-core = { git = "https://github.com/apibara/dna", rev = "9caa385" }
 apibara-sdk = { git = "https://github.com/apibara/dna", rev = "9caa385" }
 kanshi = { git = "ssh://git@github.com/RougeDevs/kanshi.git", branch = "fix/integrate-dna", version = "0.1.0" }
+lazy_static = "1.4.0"
