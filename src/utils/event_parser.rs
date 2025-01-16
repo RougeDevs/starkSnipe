@@ -1,6 +1,8 @@
 use anyhow::Context;
 use starknet::core::types::{Felt, U256};
 use starknet::core::utils::{normalize_address, parse_cairo_short_string};
+
+use super::call::get_aggregate_call_data;
 pub trait FromFieldBytes: Sized {
     fn from_field_bytes(bytes: [u8; 32]) -> Self;
 }
