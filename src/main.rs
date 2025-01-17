@@ -1,9 +1,28 @@
-use apibara_core::starknet::v1alpha2::Event;
+use apibara_core::starknet::v1alpha2::{Event, FieldElement};
 use dotenv::dotenv;
-use kanshi::{config::Config, dna::IndexerService};
+use kanshi::{config::Config, dna::IndexerService, utils::conversions::{apibara_field_as_felt, felt_as_apibara_field}};
+use starknet::core::utils::get_selector_from_name;
+use starknet_core::types::Felt;
 use tokio::sync::mpsc;
 use tokio::task;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use utils::{call::get_aggregate_call_data, event_parser::{CreationEvent, FromStarknetEventData, LaunchEvent}, market_cap::calculate_market_cap};
+
+mod constant;
+mod utils;
+
+lazy_static::lazy_static! {
+    pub static ref CREATION_EVENT: FieldElement = felt_as_apibara_field(&get_selector_from_name("MemecoinCreated").unwrap());
+    pub static ref LAUNCH_EVENT: FieldElement = felt_as_apibara_field(&get_selector_from_name("MemecoinLaunched").unwrap());
+}
+
+
+#[derive(Debug)]
+enum EventType {
+    Creation(CreationEvent),
+    Launch(LaunchEvent),
+}
+
 
 #[tokio::main]
 async fn main() {
@@ -51,14 +70,41 @@ async fn main() {
 }
 
 
-async fn process_event(event: Event) {
-    // Add your event processing logic here
-    // For example:
-    match event {
-        // Add pattern matching for different event types
-        _ => {
-            // Default processing
-            println!("Processing event: {:?}", event);
+async fn process_event(event: Event) -> Result<()> {
+    let event_selector = event.keys.first().context("No event selector")?;
+    let event_data: Vec<Felt> = event.data.iter().map(apibara_field_as_felt).collect();
+    println!("event_selector: {}", event_selector);
+    println!("LAUNCH EVENT: {}", &*LAUNCH_EVENT);
+    match event_selector {
+        selector if selector == &*LAUNCH_EVENT => {
+            println!("Got Launch Event: {:?}", event.from_address);
+            let mut coin_data = Default::default();
+            let decoded_data = decode_launch_data(event_data).await?;
+            match get_aggregate_call_data(&decoded_data.memecoin_address.to_string()).await {
+                Ok(data) => {
+                    coin_data = data.clone();
+                    println!("{:?}", data)
+                }
+                Err(err) => eprintln!("Error: {:?}", err),
+            }
+
+            match calculate_market_cap(coin_data.total_supply, coin_data.symbol).await {
+                Ok(data) => {
+                    println!("------- Coin Data -------");
+                    println!("{:?}", data)
+                }
+                Err(err) => eprintln!("Error: {:?}", err),
+            }
         }
+        _ => unreachable!(),
     }
+
+    Ok(())
+}
+
+async fn decode_launch_data(event_data: Vec<Felt>) -> anyhow::Result<LaunchEvent, anyhow::Error> {
+    let launch_event: LaunchEvent =
+        LaunchEvent::from_starknet_event_data(event_data).context("Parsing Launch Event")?;
+    println!("{:?}", launch_event);
+    Ok(launch_event)
 }
