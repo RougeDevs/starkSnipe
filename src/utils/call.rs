@@ -1,17 +1,18 @@
 use core::time;
 use std::str::FromStr;
 use std::str::{from_utf8};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use apibara_core::starknet::v1alpha2::FieldElement;
 use hex::decode;
 use kanshi::utils::conversions::{field_to_hex_string, field_to_string};
 use serde::{Deserialize, Serialize};
 use starknet::core::types::{BlockId, BlockTag, FunctionCall, U256};
-use starknet::core::utils::{cairo_short_string_to_felt, get_selector_from_name, normalize_address, parse_cairo_short_string};
+use starknet::core::utils::{cairo_short_string_to_felt, normalize_address, parse_cairo_short_string, starknet_keccak, NonAsciiNameError};
 use starknet::macros::selector;
 use starknet::providers::jsonrpc::HttpTransport;
 use starknet::providers::{JsonRpcClient, Provider, ProviderError};
 use starknet_core::types::Felt;
+use tokio::time::timeout;
 use url::Url;
 use num_bigint::{BigInt, BigUint};
 use num_traits::cast::ToPrimitive;
@@ -94,45 +95,41 @@ pub enum AggregateError {
     Parse(String),
 }
 
-pub async fn get_aggregate_call_data(address: &str) -> Result<Vec<String>, AggregateError> {
+pub async fn get_aggregate_call_data(address: &str, provider: JsonRpcClient<HttpTransport>) -> Result<Vec<String>, AggregateError> {
+    let timeout_duration = Duration::from_secs(10); // Adjust the timeout duration
+    // let provider = JsonRpcClient::new(HttpTransport::new(
+    //     Url::parse("https://starknet-mainnet.public.blastapi.io/rpc/v0_7")
+    //         .map_err(AggregateError::Url)?
+    // ));
+
     println!("Entering aggregate call data");
-    
-    // Create provider with error handling
-    let provider = JsonRpcClient::new(HttpTransport::new(
-        Url::parse("https://starknet-mainnet.public.blastapi.io/rpc/v0_7")
-            .map_err(AggregateError::Url)?
-    ));
-    
-    println!("provider {:?}", provider);
     let calls = generate_calls(address);
-    println!("calls {:?}", calls);
-    // Make contract call with error handling
-    let call_result = match provider
-        .call(
+    // Wrap the call with a timeout
+    let call_result = timeout(timeout_duration, provider.call(
             FunctionCall {
                 contract_address: Felt::from_hex(MULTICALL_AGGREGATOR_ADDRESS)
                     .map_err(|e| AggregateError::ContractCall(format!("Invalid address: {}", e)))?,
                 entry_point_selector: selector!("aggregate"),
-                calldata: calls,
+                calldata:calls.clone(),
             },
             BlockId::Tag(BlockTag::Latest),
-        )
-        .await {
-            Ok(result) => {
-                println!("Contract call successful!");
-                result
-            }
-            Err(e) => {
-                println!("Contract call failed: {:?}", e);
-                return Err(AggregateError::ContractCall(format!("Contract call failed: {:?}", e)));
-            }
-        };
-    println!("Call result \n {:?}", call_result);
+        ))
+        .await;
 
-    // Parse results with error handling
-    let parsed_result = parse_call_result(call_result);
-    
-    Ok(parsed_result)
+    match call_result {
+        Ok(Ok(result)) => {
+            println!("Contract call successful!");
+            Ok(parse_call_result(result))
+        },
+        Ok(Err(e)) => {
+            println!("Contract call failed: {:?}", e);
+            Err(AggregateError::ContractCall(format!("Contract call failed: {:?}", e)))
+        },
+        Err(_) => {
+            println!("Contract call timed out");
+            Err(AggregateError::ContractCall("Timeout".into()))
+        },
+    }
 }
 
 
@@ -143,6 +140,14 @@ fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt>{
     println!("calls {:?}", calls);
     // Check if address is a memecoin
     calls.push(Felt::from_hex_unchecked(MEMECOIN_FACTORY_ADDRESS));
+    println!("calls {:?}", calls);
+    // match get_selector_from_name(&selector_to_str(Selector::IsMemecoin)) {
+    //     Ok(selector) => calls.push(selector),
+    //     Err(error) => {
+    //         println!("Failed to get selector for is_memecoin \n {:?}", error);
+    //         return vec![]; // Or handle error properly
+    //     }
+    // }
     calls.push(get_selector_from_name(&selector_to_str(Selector::IsMemecoin)).unwrap());
     calls.push(Felt::ONE);
     calls.push(Felt::from_hex_unchecked(address));
@@ -333,4 +338,22 @@ pub fn decode_short_string(felt: &str) -> String {
 
 pub fn get_checksum_address(address: &str) -> String {
     address.to_string()
+}
+
+const DEFAULT_ENTRY_POINT_NAME: &str = "__default__";
+const DEFAULT_L1_ENTRY_POINT_NAME: &str = "__l1_default__";
+
+fn get_selector_from_name(func_name: &str) -> Result<Felt, NonAsciiNameError> {
+    println!("func name: {}", func_name);
+    if func_name == DEFAULT_ENTRY_POINT_NAME || func_name == DEFAULT_L1_ENTRY_POINT_NAME {
+        Ok(Felt::ZERO)
+    } else {
+        let name_bytes = func_name.as_bytes();
+        if name_bytes.is_ascii() {
+            println!("selector name: {}", starknet_keccak(name_bytes));
+            Ok(starknet_keccak(name_bytes))
+        } else {
+            Err(NonAsciiNameError)
+        }
+    }
 }

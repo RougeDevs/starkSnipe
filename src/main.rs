@@ -1,32 +1,41 @@
-use std::{panic, sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc}};
+use std::{
+    future::Future,
+    panic,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
-use anyhow::{ Context, Result};
+use anyhow::{Context, Result};
 use backtrace::Backtrace;
 use dotenv::dotenv;
-
 use kanshi::{config::Config, dna::IndexerService, utils::conversions::{apibara_field_as_felt, felt_as_apibara_field}};
 use reqwest::Error as ReqwestError;
-use starknet::{core::types::Felt, macros::selector};
-use starknet::core::utils::get_selector_from_name;
-// use telegram::{TelegramBot, TelegramConfig};
-use apibara_core::starknet::v1alpha2::{Event, FieldElement };
-use tokio::{runtime::Builder, sync::Semaphore};
-use utils::{call::get_aggregate_call_data, event_parser::{CreationEvent, FromStarknetEventData, LaunchEvent}};
+use starknet::{core::{types::Felt, utils::get_selector_from_name}, providers::{jsonrpc::HttpTransport, JsonRpcClient}};
+use apibara_core::starknet::v1alpha2::{Event, FieldElement};
+use tokio::{
+    sync::{mpsc, Semaphore, Mutex},
+    task,
+};
+use url::Url;
+use utils::{call::{get_aggregate_call_data, AggregateError}, event_parser::{CreationEvent, FromStarknetEventData, LaunchEvent}};
 use constant::constants::{selector_to_str, Selector};
 use tracing::{error, info};
 
-// mod telegram;
 mod utils;
 mod constant;
 
 lazy_static::lazy_static! {
     pub static ref CREATION_EVENT: FieldElement = felt_as_apibara_field(&get_selector_from_name("MemecoinCreated").unwrap());
     pub static ref LAUNCH_EVENT: FieldElement = felt_as_apibara_field(&get_selector_from_name("MemecoinLaunched").unwrap());
-    static ref CONCURRENT_CALLS: Semaphore = Semaphore::new(5); // Limit concurrent calls
+    static ref CONCURRENT_CALLS: Semaphore = Semaphore::new(5);
     static ref LAST_PROCESSED_BLOCK: AtomicU64 = AtomicU64::new(0);
     static ref PANIC_COUNT: AtomicUsize = AtomicUsize::new(0);
 }
 
+type BoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Debug)]
 enum EventType {
@@ -34,26 +43,9 @@ enum EventType {
     Launch(LaunchEvent),
 }
 
-
-#[derive(Debug)]
-enum AppError {
-    Reqwest(ReqwestError),
-    Telegram(String),
-    Url(url::ParseError),
-    Other(String),
-}
-
-impl From<ReqwestError> for AppError {
-    fn from(err: ReqwestError) -> Self {
-        AppError::Reqwest(err)
-    }
-}
-
-
 fn setup_panic_handler() {
     panic::set_hook(Box::new(|panic_info| {
         PANIC_COUNT.fetch_add(1, Ordering::SeqCst);
-        
         let backtrace = Backtrace::new();
         error!(
             "Thread panic occurred: {:?}\nLocation: {:?}\nBacktrace: {:?}",
@@ -64,159 +56,131 @@ fn setup_panic_handler() {
     }));
 }
 
-fn main() -> Result<(),anyhow::Error> {
+#[tokio::main]
+async fn main() -> Result<()> {
     dotenv().ok();
     setup_panic_handler();
-    let rt = Builder::new_multi_thread().enable_all().build().unwrap();
-    
-    rt.block_on(async {
-        let config = Config::new().expect("Failed to load configuration");
-        let mut indexer_service = IndexerService::new(config).await;
-        
-        // Define the event handler using `handle_event_async`
-        let handler = move |block_number: u64, event: &Event| {
-            let event_clone = event.clone();
-            // Use tokio::spawn to asynchronously handle events
-            tokio::spawn(handle_event_async(block_number, event_clone));
-        };
-        
-        // Initialize the IndexerService with the handler
-        indexer_service = indexer_service.with_handler(handler);
-        
-        // Run the indexer service
-        if let Err(err) = indexer_service.run_forever().await {
-            eprintln!("Error while running the indexer service: {:?}", err);
+
+    let provider = JsonRpcClient::new(HttpTransport::new(
+        Url::parse("https://starknet-mainnet.public.blastapi.io/rpc/v0_7")
+            .map_err(AggregateError::Url)?
+    ));
+
+    LAST_PROCESSED_BLOCK.store(0, Ordering::SeqCst);
+    let (tx, mut rx) = mpsc::channel(100);
+    let tx = Arc::new(tx);
+
+    let config = Config::new().expect("Failed to load configuration");
+    let mut indexer_service = IndexerService::new(config).await;
+
+    // Single event processor
+    let process_handle = task::spawn(async move {
+        while let Some((block_number, event)) = rx.recv().await {
+            println!("event pop {} {:?}", block_number, event);
+            if let Err(err) = handle_event(block_number, event, provider.clone()).await {
+                error!("Error processing event at block {}: {:?}", block_number, err);
+            }
         }
+    });
 
-        Ok(())
-    })
-}
+    let handler = {
+        let tx = Arc::clone(&tx);
+        move |block_number: u64, event: &Event| {
+            println!("\n\nreceived event: {:?} \n\n", event);
+            let event_clone = event.clone();  // Still needed to move into async block
+            let tx = Arc::clone(&tx);
+            tokio::spawn(async move {
+                if let Err(e) = tx.send((block_number, event_clone)).await {
+                    error!("Failed to send event to processor: {:?}", e);
+                }
+            });
+        }
+    };
+    
+    indexer_service = indexer_service.with_handler(handler);
+    
+    let shutdown_signal = tokio::signal::ctrl_c();
 
-async fn handle_event_async(block_number: u64, event: Event) {
-    if let Err(err) = handle_event(block_number, &event).await {
-        eprintln!("Error processing event at block {}: {:?}", block_number, err);
+    tokio::select! {
+        result = indexer_service.run_forever() => {
+            if let Err(err) = result {
+                error!("Indexer service error: {:?}", err);
+            }
+        }
+        _ = shutdown_signal => {
+            info!("Received shutdown signal");
+        }
     }
+
+    // Wait for processor to complete
+    if let Err(e) = process_handle.await {
+        error!("Process handle error: {:?}", e);
+    }
+
+    Ok(())
 }
 
-async fn handle_event(block_number: u64, event: &Event) -> Result<()> {
+async fn handle_event(block_number: u64, event: Event, provider: JsonRpcClient<HttpTransport>) -> Result<()> {
     let event_selector = event.keys.first().context("No event selector")?;
     let event_data: Vec<Felt> = event.data.iter().map(apibara_field_as_felt).collect();
     
     match event_selector {
         // selector if selector == &*CREATION_EVENT => {
-        //     eprintln!("Got Creation Event at block: {:?}", block_number);
         //     let creation_event = decode_creation_data(event_data).await?;
-        //     println!("Creation Event: {:?}", creation_event);
+        //     info!("Creation event processed at block {}", block_number);
         // }
         selector if selector == &*LAUNCH_EVENT => {
-            eprintln!("Got Launch Event at block: {:?}", block_number);
-            let lock = tokio::sync::Mutex::new(());
-
-            let result = {
-                let _lock = lock.lock().await;
-                let decoded_data = decode_launch_data(event_data).await?;
-                process_launch_event(block_number, decoded_data).await
-            };
-            // let decoded_data = decode_launch_data(event_data).await?;
-            
-            // Process launch event with rate limiting and error handling
-            // if let Err(error) = process_launch_event(block_number, decoded_data).await {
-            //     println!("Processing error: {:?}", error);
-            // } else {
-            //     println!("Procssed");
-            // }
+            println!("new Launch event received at: {} \n\n", block_number);
+            let launch_event = decode_launch_data(event_data).await?;
+            process_launch_event(block_number, launch_event, provider).await?;
         }
-        _ => unreachable!(),
+        _ => (),
     }
     
     Ok(())
 }
 
-async fn process_launch_event(block_number: u64, launch_event: LaunchEvent) -> Result<()> {
-    // Skip if we've already processed this block
-    let last_processed = LAST_PROCESSED_BLOCK.load(Ordering::Relaxed);
-    if block_number <= last_processed {
+async fn process_launch_event(block_number: u64, launch_event: LaunchEvent, provider: JsonRpcClient<HttpTransport>) -> Result<()> {
+    if block_number <= LAST_PROCESSED_BLOCK.load(Ordering::Relaxed) {
         return Ok(());
     }
 
-    // Acquire semaphore permit for rate limiting
-    let _permit = CONCURRENT_CALLS.acquire().await?;
-    
-    // Convert address with error handling
+    // let _permit = CONCURRENT_CALLS.acquire().await?;
     let memecoin_address = launch_event.memecoin_address.to_string();
-    
-    // Spawn a new task with proper error handling
-    // get_aggregate_call_data(&memecoin_address).await?;
-    // let result = get_aggregate_call_data(&memecoin_address).await;
-    match get_aggregate_call_data(&memecoin_address).await {
+    println!("memecoin_address: {:?}", launch_event.memecoin_address);
+    let _provider = provider.clone();
+    match get_aggregate_call_data(&memecoin_address, _provider).await {
         Ok(response) => {
-            info!("Launch event processed successfully at block {}", block_number);
-            info!("Memecoin address: {}", memecoin_address);
-            info!("Aggregate call response:");
+            info!("Processed memecoin {} at block {}", memecoin_address, block_number);
             for data in response.iter() {
                 info!("{}", data);
             }
-            
-            // Update the last processed block
             LAST_PROCESSED_BLOCK.store(block_number, Ordering::Relaxed);
-        },
+        }
         Err(error) => {
-            error!("Failed to process launch event at block {}", block_number);
-            error!("Memecoin address: {}", memecoin_address);
-            error!("Error: {:?}", error);
-            
-            // Spawn retry task
-            tokio::spawn(async move {
-                retry_failed_call(&memecoin_address, block_number).await;
-            });
+            error!("Failed to process {}: {:?}", memecoin_address, error);
+            task::spawn(retry_failed_call(memecoin_address, block_number, provider.clone()));
         }
     }
-    // tokio::spawn(async move {
-    //     match get_aggregate_call_data(&memecoin_address).await {
-    //         Ok(result) => {
-    //             println!("Successfully processed memecoin {}: {:?}", memecoin_address, result);
-    //             LAST_PROCESSED_BLOCK.store(block_number, Ordering::Relaxed);
-    //         },
-    //         Err(e) => {
-    //             eprintln!("Error processing memecoin {}: {:?}", memecoin_address, e);
-    //             // Implement retry logic if needed
-    //             retry_failed_call(&memecoin_address, block_number).await;
-    //         }
-    //     }
-    // });
-
     Ok(())
 }
 
-
-async fn retry_failed_call(address: &str, block_number: u64) {
-    const MAX_RETRIES: u32 = 3;
-    const RETRY_DELAY_MS: u64 = 1000;
-
-    for retry in 0..MAX_RETRIES {
-        tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS * (retry as u64 + 1))).await;
-        
-        match get_aggregate_call_data(address).await {
-            Ok(result) => {
-                println!("Retry succeeded for memecoin {} on attempt {}: {:?}", address, retry + 1, result);
-                LAST_PROCESSED_BLOCK.store(block_number, Ordering::Relaxed);
-                return;
-            },
-            Err(e) => {
-                eprintln!("Retry {} failed for memecoin {}: {:?}", retry + 1, address, e);
-            }
+async fn retry_failed_call(address: String, block_number: u64, provider: JsonRpcClient<HttpTransport>) {
+    for retry in 0..3 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000 * (retry + 1) as u64)).await;
+        if get_aggregate_call_data(&address, provider.clone()).await.is_ok() {
+            info!("Retry succeeded for {} on attempt {}", address, retry + 1);
+            LAST_PROCESSED_BLOCK.store(block_number, Ordering::Relaxed);
+            return;
         }
     }
-    
-    eprintln!("All retries failed for memecoin {}", address);
+    error!("All retries failed for {}", address);
 }
 
-async fn decode_creation_data(event_data: Vec<Felt>) -> anyhow::Result<CreationEvent, anyhow::Error>{
-    let creation_event: CreationEvent = CreationEvent::from_starknet_event_data(event_data).context("Parsing Creation Event")?;
-    Ok(creation_event)
-    
+async fn decode_creation_data(event_data: Vec<Felt>) -> Result<CreationEvent> {
+    CreationEvent::from_starknet_event_data(event_data).context("Parsing Creation Event")
 }
-async fn decode_launch_data(event_data: Vec<Felt>) -> anyhow::Result<LaunchEvent, anyhow::Error>{
-    let launch_event: LaunchEvent = LaunchEvent::from_starknet_event_data(event_data).context("Parsing Launch Event")?;
-    Ok(launch_event)
+
+async fn decode_launch_data(event_data: Vec<Felt>) -> Result<LaunchEvent> {
+    LaunchEvent::from_starknet_event_data(event_data).context("Parsing Launch Event")
 }
