@@ -46,8 +46,11 @@ pub fn u256_to_decimal_str(value: U256) -> String {
 
 pub fn parse_and_validate_short_string(felt: &Felt) -> anyhow::Result<String> {
     let result = parse_cairo_short_string(felt)?;
-    
-    if !result.chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace()) {
+
+    if !result
+        .chars()
+        .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+    {
         return Ok(felt.to_string());
     }
     Ok(result)

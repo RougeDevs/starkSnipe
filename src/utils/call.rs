@@ -1,68 +1,18 @@
-use core::time;
-use std::str::FromStr;
-use std::str::{from_utf8};
-use std::time::Instant;
-use apibara_core::starknet::v1alpha2::FieldElement;
-use hex::decode;
-use kanshi::utils::conversions::{field_to_hex_string, field_to_string};
-use serde::{Deserialize, Serialize};
+use super::types::ekubo::{EkuboPoolParameters, Launch, Liquidity, Memecoin, StartingPrice};
+use num_traits::cast::ToPrimitive;
 use starknet::core::types::{BlockId, BlockTag, FunctionCall, U256};
-use starknet::core::utils::{cairo_short_string_to_felt, get_selector_from_name, normalize_address, parse_cairo_short_string};
+use starknet::core::utils::{get_selector_from_name, normalize_address, parse_cairo_short_string};
 use starknet::macros::selector;
 use starknet::providers::jsonrpc::HttpTransport;
 use starknet::providers::{JsonRpcClient, Provider, ProviderError};
 use starknet_core::types::Felt;
 use url::Url;
-use num_bigint::{BigInt, BigUint};
-use num_traits::cast::ToPrimitive;
 
-
-use crate::constant::constants::{selector_to_str, Selector};
+use crate::constant::constants::{
+    selector_to_str, Selector, EXCHANGE_ADDRESS, MEMECOIN_FACTORY_ADDRESS,
+    MULTICALL_AGGREGATOR_ADDRESS,
+};
 use crate::utils::event_parser::{parse_and_validate_short_string, u256_to_decimal_str};
-
-const MULTICALL_AGGREGATOR_ADDRESS: &str = "0x01a33330996310a1e3fa1df5b16c1e07f0491fdd20c441126e02613b948f0225";
-const MEMECOIN_FACTORY_ADDRESS: &str = "0x01a46467a9246f45c8c340f1f155266a26a71c07bd55d36e8d1c7d0d438a2dbc";
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Memecoin {
-    pub address: String,
-    pub name: String,
-    pub symbol: String,
-    pub total_supply: String,
-    pub owner: String,
-    pub is_launched: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub launch: Option<Launch>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub liquidity: Option<Liquidity>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Launch {
-    pub team_allocation: String,
-    pub block_number: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Liquidity {
-    pub launch_manager: String,
-    pub ekubo_id: String,
-    pub quote_token: String,
-    pub starting_tick: i64,
-}
-
-#[derive(Debug)]
-struct EkuboPoolParameters {
-    fee: BigUint,
-    tick_spacing: BigUint,
-    starting_price: StartingPrice,
-    bound: BigUint,
-}
-
-#[derive(Debug)]
-struct StartingPrice {
-    mag: BigUint,
-    sign: bool,
-}
 
 trait FromFieldBytes: Sized {
     fn from_field_bytes(bytes: [u8; 32]) -> Self;
@@ -77,32 +27,32 @@ impl FromFieldBytes for u128 {
     }
 }
 
-const EKUBO_NFT: &str = "0xbf8a9";
+const EKUBO_NFT: &str = "EKUBO_NFT";
 
 #[derive(Debug, thiserror::Error)]
 pub enum AggregateError {
     #[error("Provider error: {0}")]
     Provider(#[from] ProviderError),
-    
+
     #[error("URL parsing error: {0}")]
     Url(#[from] url::ParseError),
-    
+
     #[error("Contract call failed: {0}")]
-    ContractCall(String), 
-    
+    ContractCall(String),
+
     #[error("Parse error: {0}")]
     Parse(String),
 }
 
-pub async fn get_aggregate_call_data(address: &str) -> Result<Vec<String>, AggregateError> {
+pub async fn get_aggregate_call_data(address: &str) -> Result<Memecoin, AggregateError> {
     println!("Entering aggregate call data");
-    
+
     // Create provider with error handling
     let provider = JsonRpcClient::new(HttpTransport::new(
         Url::parse("https://starknet-mainnet.public.blastapi.io/rpc/v0_7")
-            .map_err(AggregateError::Url)?
+            .map_err(AggregateError::Url)?,
     ));
-    
+
     println!("provider {:?}", provider);
     let calls = generate_calls(address);
     println!("calls {:?}", calls);
@@ -117,171 +67,159 @@ pub async fn get_aggregate_call_data(address: &str) -> Result<Vec<String>, Aggre
             },
             BlockId::Tag(BlockTag::Latest),
         )
-        .await {
-            Ok(result) => {
-                println!("Contract call successful!");
-                result
-            }
-            Err(e) => {
-                println!("Contract call failed: {:?}", e);
-                return Err(AggregateError::ContractCall(format!("Contract call failed: {:?}", e)));
-            }
-        };
+        .await
+    {
+        Ok(result) => {
+            println!("Contract call successful!");
+            result
+        }
+        Err(e) => {
+            println!("Contract call failed: {:?}", e);
+            return Err(AggregateError::ContractCall(format!(
+                "Contract call failed: {:?}",
+                e
+            )));
+        }
+    };
     println!("Call result \n {:?}", call_result);
 
     // Parse results with error handling
-    let parsed_result = parse_call_result(call_result);
-    
-    Ok(parsed_result)
+    let parsed_result = parse_call_result(address, call_result).await;
+
+    Ok(parsed_result.unwrap())
 }
 
-
-fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt>{
+fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
     println!("entering generate_calls");
-    let start_time = Instant::now();
-    let mut calls: Vec<Felt> = vec![Felt::from(8)];
-    println!("calls {:?}", calls);
-    // Check if address is a memecoin
-    calls.push(Felt::from_hex_unchecked(MEMECOIN_FACTORY_ADDRESS));
-    calls.push(get_selector_from_name(&selector_to_str(Selector::IsMemecoin)).unwrap());
-    calls.push(Felt::ONE);
-    calls.push(Felt::from_hex_unchecked(address));
-    println!("calls 148 {:?}", calls);
-    // Check on address for memecoin name
-    calls.push(Felt::from_hex_unchecked(address));
-    calls.push(get_selector_from_name(&selector_to_str(Selector::Name)).unwrap());
-    calls.push(Felt::ZERO);
-    println!("calls 153 {:?}", calls);
+    let mut calls: Vec<Felt> = vec![Felt::from(10)];
 
-    // Check on address for memecoin symbol
-    calls.push(Felt::from_hex_unchecked(address));
-    calls.push(get_selector_from_name(&selector_to_str(Selector::Symbol)).unwrap());
-    calls.push(Felt::ZERO);
-    println!("calls 159 {:?}", calls);
+    let factory_address = MEMECOIN_FACTORY_ADDRESS;
+    let ekubo_id: String = 1.to_string();
 
-    // Check on address for total supply
-    calls.push(Felt::from_hex_unchecked(address));
-    calls.push(get_selector_from_name(&selector_to_str(Selector::TotalSupply)).unwrap());
-    calls.push(Felt::ZERO);
+    let factory_calls = [
+        ("is_memecoin", Selector::IsMemecoin),
+        ("exchange", Selector::ExchangeAddress),
+        ("locked_liquidity", Selector::LockedLiquidity),
+    ];
 
-    // Check on address for owner
-    calls.push(Felt::from_hex_unchecked(address));
-    calls.push(get_selector_from_name(&selector_to_str(Selector::Owner)).unwrap());
-    calls.push(Felt::ZERO);
+    for (name, selector) in factory_calls {
+        calls.push(Felt::from_hex_unchecked(factory_address));
+        calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
+        calls.push(Felt::ONE);
+        calls.push(if name == "exchange" {
+            Felt::from_dec_str(&ekubo_id).unwrap()
+        } else {
+            Felt::from_hex_unchecked(address)
+        });
+    }
 
-    // Check on address for is_launched
-    calls.push(Felt::from_hex_unchecked(address));
-    calls.push(get_selector_from_name(&selector_to_str(Selector::LaunchedAtBlockNumber)).unwrap());
-    calls.push(Felt::ZERO);
+    // Add other calls with detailed logging
+    let coin_calls = [
+        ("name", Selector::Name),
+        ("symbol", Selector::Symbol),
+        ("total_supply", Selector::TotalSupply),
+        ("owner", Selector::Owner),
+        ("launched_block", Selector::LaunchedAtBlockNumber),
+        ("team_allocation", Selector::GetTeamAllocation),
+        (
+            "liquidity_params",
+            Selector::LaunchedWithLiquidityParameters,
+        ),
+    ];
 
-    println!("time: {:?}", start_time.elapsed());
-    // Check on address for get_team_allocation
-    calls.push(Felt::from_hex_unchecked(address));
-    calls.push(get_selector_from_name(&selector_to_str(Selector::GetTeamAllocation)).unwrap());
-    calls.push(Felt::ZERO);
-
-    // Check onlaunch with liquidatiy parameters
-    calls.push(Felt::from_hex_unchecked(address));
-    calls.push(get_selector_from_name(&selector_to_str(Selector::LaunchedWithLiquidityParameters)).unwrap());
-    calls.push(Felt::ZERO);
-    println!("calls: \n{:?}",calls);
+    for (name, selector) in coin_calls {
+        calls.push(Felt::from_hex_unchecked(address));
+        calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
+        calls.push(Felt::ZERO);
+    }
     calls
 }
+async fn parse_call_result(
+    address: &str,
+    call_result: Vec<Felt>,
+) -> Result<Memecoin, anyhow::Error> {
+    let is_memecoin = call_result[3] != Felt::ZERO;
+    let exchange = normalize_address(Felt::from_bytes_be(&call_result[5].to_bytes_be()))
+        .to_hex_string()
+        .eq(EXCHANGE_ADDRESS);
 
-fn parse_call_result(call_result: Vec<Felt>) -> Vec<String> {
-    println!("call results length: {:?}", call_result.len());
-    let mut i = 1; // Skip block_number
-    let total_length = call_result[i].to_bytes_be();
-    i += 1;
-    
-    let mut responses = vec![];
-
-    // Safely handle name parsing
-    if let Ok(name) = parse_cairo_short_string(&Felt::from_bytes_be(&call_result[5].to_bytes_be())) {
-        responses.push(format!("Name: {}", name));
-    } else {
-        responses.push("Name: <invalid>".to_string());
+    if !is_memecoin || !exchange {
+        panic!("Invalid Memecoin");
     }
 
-    // Symbol parsing with safe conversion
-    if let Ok(symbol) = parse_and_validate_short_string(&Felt::from_bytes_be(
-        &call_result[7].to_bytes_be()
-    )) {
-        responses.push(format!("Symbol: {}", symbol));
-    } else {
-        responses.push("Symbol: <invalid>".to_string());
+    let has_liquidity = call_result[6] > Felt::ZERO;
+    if !has_liquidity {
+        panic!("No Liquidity");
     }
-    // let symbol = field_to_string(&call_result[7]);
-    // responses.push(format!("Symbol: {}", symbol));
 
-    // Total Supply parsing with safe U256 construction
-    let total_supply = match (call_result.get(9), call_result.get(10)) {
-        (Some(high), Some(low)) => {
-            let high_bytes = high.to_bytes_be();
-            let low_bytes = low.to_bytes_be();
-            let high_u128 = u128::from_be_bytes(high_bytes[16..32].try_into().unwrap_or([0; 16]));
-            let low_u128 = u128::from_be_bytes(low_bytes[16..32].try_into().unwrap_or([0; 16]));
-            u256_to_decimal_str(U256::from_words(high_u128, low_u128))
-        }
-        _ => "0".to_string()
+    let name = parse_cairo_short_string(&Felt::from_bytes_be(&call_result[12].to_bytes_be()))?;
+
+    let symbol =
+        parse_and_validate_short_string(&Felt::from_bytes_be(&call_result[14].to_bytes_be()))?;
+
+    let total_supply = match (call_result.get(16), call_result.get(17)) {
+        (Some(low), Some(high)) => parse_u256_from_felts(low, high),
+        _ => "0".to_string(),
     };
-    responses.push(format!("Total Supply: {}", total_supply));
 
-    // Owner address with safe conversion
-    // let owner = field_to_hex_string(&call_result[12]);
-    let owner = normalize_address(Felt::from_bytes_be(
-        &call_result[12].to_bytes_be(),
-    ));
-    responses.push(format!("Owner: {}", owner));
-    
+    let owner = normalize_address(Felt::from_bytes_be(&call_result[19].to_bytes_be()));
 
-    // Launch block number with safe conversion
-    let launched_block_number = call_result[14].to_bytes_be();
-    responses.push(format!("Launched Block Number: 0x{}", hex::encode(launched_block_number)));
+    let launched_block_number = call_result[21].to_biguint();
 
-    // Team allocation with safe U256 construction
-    let team_allocation = match (call_result.get(16), call_result.get(17)) {
-        (Some(high), Some(low)) => {
-            let high_bytes = high.to_bytes_be();
-            let low_bytes = low.to_bytes_be();
-            let high_u128 = u128::from_be_bytes(high_bytes[16..32].try_into().unwrap_or([0; 16]));
-            let low_u128 = u128::from_be_bytes(low_bytes[16..32].try_into().unwrap_or([0; 16]));
-            u256_to_decimal_str(U256::from_words(high_u128, low_u128))
-        }
-        _ => "0".to_string()
+    let team_allocation = match (call_result.get(23), call_result.get(24)) {
+        (Some(low), Some(high)) => parse_u256_from_felts(low, high),
+        _ => "0".to_string(),
     };
-    responses.push(format!("Team Allocation: {}", team_allocation));
 
-    println!("Responses: {:?}", responses);
-    responses
+    let mut index = 28;
+    let ekubo_pool_params = parse_ekubo_pool_parameters(&call_result, &mut index);
+    let liquidity = Liquidity {
+        launch_manager: normalize_address(Felt::from_bytes_be(&call_result[8].to_bytes_be()))
+            .to_hex_string(),
+        ekubo_id: EKUBO_NFT.to_string(),
+        quote_token: normalize_address(Felt::from_bytes_be(&call_result[33].to_bytes_be()))
+            .to_hex_string(),
+        starting_tick: ekubo_pool_params.starting_price.mag.to_i64().unwrap_or(0)
+            * if ekubo_pool_params.starting_price.sign {
+                1
+            } else {
+                -1
+            },
+    };
+    Ok(Memecoin {
+        address: address.to_string(),
+        name,
+        symbol,
+        total_supply,
+        owner: owner.to_hex_string(),
+        is_launched: true,
+        launch: Launch {
+            team_allocation,
+            block_number: launched_block_number.to_u64().unwrap(),
+        },
+        liquidity,
+    })
 }
 
-// Helper function to safely convert field elements to hex strings
-pub fn safe_field_to_hex(felt: &Felt) -> String {
-    format!("0x{}", hex::encode(felt.to_bytes_be()))
+// Helper function to parse U256 from two Felt elements (high and low)
+pub fn parse_u256_from_felts(low: &Felt, high: &Felt) -> String {
+    u256_to_decimal_str(U256::from_words(
+        low.to_u128().unwrap(),
+        high.to_u128().unwrap(),
+    ))
 }
 
-// Updated combine_biguints function with overflow protection
-fn combine_biguints(high: BigUint, low: BigUint) -> BigUint {
-    let shift_amount = 128u32;
-    let two = BigUint::from(2u32);
-    
-    // Check if shift would overflow
-    if high.bits() > 128 {
-        return low; // Return just the low bits if high bits would overflow
-    }
-    
-    high * two.pow(shift_amount) + low
-}
-
+// Parse Ekubo Pool Parameters
 fn parse_ekubo_pool_parameters(call_result: &Vec<Felt>, i: &mut usize) -> EkuboPoolParameters {
     let fee = call_result[*i].to_biguint();
     *i += 1;
     let tick_spacing = call_result[*i].to_biguint();
     *i += 1;
     println!("size: {:?}", *i);
+
     let starting_price_mag = call_result[*i].to_biguint();
     *i += 1;
+
     let starting_price_sign = call_result[*i].to_biguint().to_usize().unwrap() == 1;
     *i += 1;
 
@@ -327,10 +265,4 @@ pub fn decode_short_string(felt: &str) -> String {
             format!("0x{}", hex_str)
         }
     }
-}
-
-
-
-pub fn get_checksum_address(address: &str) -> String {
-    address.to_string()
 }
