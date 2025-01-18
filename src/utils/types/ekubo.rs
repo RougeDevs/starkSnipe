@@ -130,3 +130,33 @@ pub struct Bound {
     pub mag: String,
     pub sign: String,
 }
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PoolKeyResponse {
+    pub token0: String,
+    pub token1: String,
+    pub fee: String,
+    pub tick_spacing: u64,
+    pub extension: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RouteResponse {
+    pub pool_key: PoolKeyResponse,
+    pub sqrt_ratio_limit: String,
+    pub skip_ahead: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SplitResponse {
+    pub amount: String,
+    #[serde(rename = "specifiedAmount")]
+    pub specified_amount: String,
+    pub route: Vec<RouteResponse>,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct QuoteResponseApi {
+    pub total: String,
+    pub splits: Vec<SplitResponse>,
+}

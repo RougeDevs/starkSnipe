@@ -1,34 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct PoolKeyResponse {
-    token0: String,
-    token1: String,
-    fee: String,
-    tick_spacing: u64,
-    extension: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct RouteResponse {
-    pool_key: PoolKeyResponse,
-    sqrt_ratio_limit: String,
-    skip_ahead: u64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct SplitResponse {
-    amount: String,
-    #[serde(rename = "specifiedAmount")]
-    specified_amount: String,
-    route: Vec<RouteResponse>,
-}
-
-#[derive(Debug, serde::Deserialize, Clone)]
-pub struct QuoteResponseApi {
-    total: String,
-    splits: Vec<SplitResponse>,
-}
+use super::types::ekubo::QuoteResponseApi;
 
 async fn get_ekubo_quote(
     amount: String,
@@ -60,9 +30,9 @@ async fn get_ekubo_quote(
 }
 
 pub async fn calculate_market_cap(
-    total_supply: String,
-    symbol: String,
-) -> Result<String, anyhow::Error> {
+    total_supply: &str,
+    symbol: &str,
+) -> Result<(String, String), anyhow::Error> {
     let amount = 10u64.pow(6).to_string();
 
     // Try to get quote with better error handling
@@ -95,6 +65,7 @@ pub async fn calculate_market_cap(
 
     // Perform the calculation
     let market_cap = total_supply_num / response_total_num;
+    let token_price: f64 = 1f64 / response_total_num;
 
-    Ok(market_cap.to_string())
+    Ok((token_price.to_string(), market_cap.to_string()))
 }

@@ -1,5 +1,6 @@
 use super::types::ekubo::{EkuboPoolParameters, Launch, Liquidity, Memecoin, StartingPrice};
 use num_traits::cast::ToPrimitive;
+use serde::de::value::Error;
 use starknet::core::types::{BlockId, BlockTag, FunctionCall, U256};
 use starknet::core::utils::{get_selector_from_name, normalize_address, parse_cairo_short_string};
 use starknet::macros::selector;
@@ -44,46 +45,27 @@ pub enum AggregateError {
     Parse(String),
 }
 
-pub async fn get_aggregate_call_data(address: &str) -> Result<Memecoin, AggregateError> {
+fn get_provider() -> Result<JsonRpcClient<HttpTransport>, AggregateError> {
+    println!("In get provider");
     // Create provider with error handling
     let provider = JsonRpcClient::new(HttpTransport::new(
         Url::parse("https://starknet-mainnet.public.blastapi.io/rpc/v0_7")
             .map_err(AggregateError::Url)?,
     ));
+    Ok(provider)
+}
 
+pub async fn get_aggregate_call_data(address: &str) -> Result<Memecoin, AggregateError> {
+    println!("In aggregate call");
     let calls = generate_calls(address);
-    // Make contract call with error handling
-    let call_result = match provider
-        .call(
-            FunctionCall {
-                contract_address: Felt::from_hex(MULTICALL_AGGREGATOR_ADDRESS)
-                    .map_err(|e| AggregateError::ContractCall(format!("Invalid address: {}", e)))?,
-                entry_point_selector: selector!("aggregate"),
-                calldata: calls,
-            },
-            BlockId::Tag(BlockTag::Latest),
-        )
-        .await
-    {
-        Ok(result) => {
-            println!("Contract call successful!");
-            result
-        }
-        Err(e) => {
-            println!("Contract call failed: {:?}", e);
-            return Err(AggregateError::ContractCall(format!(
-                "Contract call failed: {:?}",
-                e
-            )));
-        }
-    };
+    let call_result = multicall_contract(calls).await.unwrap();
     // Parse results with error handling
-    let parsed_result = parse_call_result(address, call_result).await;
-
-    Ok(parsed_result.unwrap())
+    let parsed_result = parse_call_result(address, call_result).await.unwrap();
+    Ok(parsed_result)
 }
 
 fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
+    println!("In generate call");
     let mut calls: Vec<Felt> = vec![Felt::from(10)];
 
     let factory_address = MEMECOIN_FACTORY_ADDRESS;
@@ -120,17 +102,16 @@ fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
         ),
     ];
 
-    for (name, selector) in coin_calls {
+    for (_name, selector) in coin_calls {
         calls.push(Felt::from_hex_unchecked(address));
         calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
         calls.push(Felt::ZERO);
     }
     calls
 }
-async fn parse_call_result(
-    address: &str,
-    call_result: Vec<Felt>,
-) -> Result<Memecoin, anyhow::Error> {
+
+async fn parse_call_result(address: &str, call_result: Vec<Felt>) -> Result<Memecoin, Error> {
+    println!("In parse call");
     let is_memecoin = call_result[3] != Felt::ZERO;
     let exchange = normalize_address(Felt::from_bytes_be(&call_result[5].to_bytes_be()))
         .to_hex_string()
@@ -145,10 +126,12 @@ async fn parse_call_result(
         panic!("No Liquidity");
     }
 
-    let name = parse_cairo_short_string(&Felt::from_bytes_be(&call_result[12].to_bytes_be()))?;
+    let name =
+        parse_cairo_short_string(&Felt::from_bytes_be(&call_result[12].to_bytes_be())).unwrap();
 
     let symbol =
-        parse_and_validate_short_string(&Felt::from_bytes_be(&call_result[14].to_bytes_be()))?;
+        parse_and_validate_short_string(&Felt::from_bytes_be(&call_result[14].to_bytes_be()))
+            .unwrap();
 
     let total_supply = match (call_result.get(16), call_result.get(17)) {
         (Some(low), Some(high)) => parse_u256_from_felts(low, high),
@@ -258,4 +241,108 @@ pub fn decode_short_string(felt: &str) -> String {
             format!("0x{}", hex_str)
         }
     }
+}
+
+async fn multicall_contract(calls: Vec<Felt>) -> Result<Vec<Felt>, AggregateError> {
+    println!("In multicall contract");
+    let provider = get_provider().unwrap();
+
+    // Make contract call with error handling
+    let call_result = match provider
+        .call(
+            FunctionCall {
+                contract_address: Felt::from_hex(MULTICALL_AGGREGATOR_ADDRESS)
+                    .map_err(|e| AggregateError::ContractCall(format!("Invalid address: {}", e)))?,
+                entry_point_selector: selector!("aggregate"),
+                calldata: calls,
+            },
+            BlockId::Tag(BlockTag::Latest),
+        )
+        .await
+    {
+        std::result::Result::Ok(result) => {
+            println!("Contract call successful!");
+            result
+        }
+        Err(e) => {
+            println!("Contract call failed: {:?}", e);
+            return Err(AggregateError::ContractCall(format!(
+                "Contract call failed: {:?}",
+                e
+            )));
+        }
+    };
+
+    Ok(call_result)
+}
+
+pub async fn get_balance(contract_address: &str, account: &str) -> Result<String, AggregateError> {
+    println!("In get balance");
+    let provider = get_provider().unwrap();
+    // Make contract call with error handling
+    let call_result = match provider
+        .call(
+            FunctionCall {
+                contract_address: Felt::from_hex(contract_address)
+                    .map_err(|e| AggregateError::ContractCall(format!("Invalid address: {}", e)))?,
+                entry_point_selector: selector!("balance_of"),
+                calldata: vec![Felt::from_hex_unchecked(account)],
+            },
+            BlockId::Tag(BlockTag::Latest),
+        )
+        .await
+    {
+        Ok(result) => {
+            println!("Contract call successful!");
+            result
+        }
+        Err(e) => {
+            println!("Contract call failed: {:?}", e);
+            return Err(AggregateError::ContractCall(format!(
+                "Contract call failed: {:?}",
+                e
+            )));
+        }
+    };
+
+    let balance = match (call_result.get(0), call_result.get(1)) {
+        (Some(low), Some(high)) => parse_u256_from_felts(low, high),
+        _ => "0".to_string(),
+    };
+
+    Ok(balance)
+}
+
+pub async fn validate_memecoins(addresses: Vec<&str>) -> Result<Vec<&str>, Error> {
+    println!("In validate memecall");
+    let calls = generate_validate_calls(addresses.clone());
+    let call_result = multicall_contract(calls).await.unwrap();
+    let mut memecoin_addresses: Vec<&str> = Vec::new();
+    // Iterate over each data item in call_result (starting from index 2)
+    for (index, data) in call_result
+        .iter()
+        .skip(2)
+        .take(addresses.len() - 2)
+        .enumerate()
+    {
+        let is_memecoin = *data > Felt::ZERO;
+
+        if is_memecoin {
+            memecoin_addresses.push(addresses[index]);
+        }
+    }
+    Ok(memecoin_addresses)
+}
+
+fn generate_validate_calls(addresses: Vec<&str>) -> Vec<Felt> {
+    println!("In generate validate calls");
+    let mut calls: Vec<Felt> = vec![Felt::from(addresses.len())];
+    let factory_address = MEMECOIN_FACTORY_ADDRESS;
+    for address in addresses {
+        calls.push(Felt::from_hex_unchecked(factory_address));
+        calls.push(get_selector_from_name("is_memecoin").unwrap());
+        calls.push(Felt::ONE);
+        calls.push(Felt::from_hex_unchecked(address));
+    }
+    calls
 }

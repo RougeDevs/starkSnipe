@@ -1,12 +1,13 @@
 use kanshi::dna::EventData;
-use serde::Deserialize;
 use reqwest::{Client, Error};
-use tokio::sync::RwLock;
+use serde::Deserialize;
+use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
-use serde_json::json;
+use tokio::sync::RwLock;
 
 use crate::utils::event_parser::CreationEvent;
+use crate::utils::types::common::MemecoinInfo;
 use crate::utils::types::ekubo::Memecoin;
 use crate::EventType;
 
@@ -64,10 +65,8 @@ pub struct TelegramConfig {
 impl TelegramConfig {
     pub fn new() -> Self {
         Self {
-            token: std::env::var("TELEGRAM_TOKEN")
-                .expect("TELEGRAM_TOKEN not found"),
-            dex_url: std::env::var("DEX_URL")
-                .unwrap_or_else(|_| "https://app.avnu.fi".to_string()),
+            token: std::env::var("TELEGRAM_TOKEN").expect("TELEGRAM_TOKEN not found"),
+            dex_url: std::env::var("DEX_URL").unwrap_or_else(|_| "https://app.avnu.fi".to_string()),
             explorer_url: std::env::var("EXPLORER_URL")
                 .unwrap_or_else(|_| "https://starkscan.co".to_string()),
         }
@@ -83,10 +82,8 @@ pub struct TelegramBot {
 
 impl TelegramBot {
     pub fn new(config: TelegramConfig) -> Result<Self, Error> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()?;
-        
+        let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+
         let base_url = format!("https://api.telegram.org/bot{}", config.token);
 
         Ok(Self {
@@ -125,11 +122,7 @@ impl TelegramBot {
         });
 
         let url = format!("{}/setMyCommands", self.base_url);
-        let response = self.client
-            .post(&url)
-            .json(&commands)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&commands).send().await?;
 
         if !response.status().is_success() {
             eprintln!("Failed to set commands: {:?}", response.text().await?);
@@ -138,78 +131,71 @@ impl TelegramBot {
         Ok(())
     }
 
-    pub async fn broadcast_event(&self, event_data: Memecoin, market_cap: String) -> Result<(), Error> {
+    pub async fn broadcast_event(&self, event_data: MemecoinInfo) -> Result<(), Error> {
         let active_users = self.active_users.read().await;
-        
-        let message = 
-                format!(
-                    "🚨 *FRESH LAUNCH ALERT*\n\n\
+
+        let message = format!(
+            "🚨 *FRESH LAUNCH ALERT*\n\n\
                     *{}* ({}) has landed on Starknet!\n\n\
                     Starting MCAP: ${}\n\
                     Supply: {}\n\
                     Liquidity: EKUBO Pool #{}\n\
-                    Starting Tick: {}\n\
                     Team: {}%\n\
-                    Launch Manager: `{}`\n\n\
                     ⚡️ GET IN NOW\n\n\
                     #Starknet #Memecoin #{}",
-                    event_data.name,
-                    event_data.symbol,
-                    self.format_price(market_cap),
-                    self.format_compact_number(event_data.total_supply),
-                    event_data.liquidity.ekubo_id,
-                    event_data.liquidity.starting_tick,
-                    self.format_percentage(event_data.launch.team_allocation),
-                    self.format_short_address(&event_data.liquidity.launch_manager),
-                    event_data.symbol
-                );
-            
-    
-        let keyboard = self.create_launch_keyboard(
-            &event_data.address,
-            &event_data.symbol
+            event_data.name,
+            event_data.symbol,
+            self.format_price(event_data.market_cap),
+            self.format_compact_number(event_data.total_supply),
+            event_data.usd_dex_liquidity,
+            self.format_percentage(event_data.team_allocation),
+            event_data.symbol
         );
-    
+
+        let keyboard = self.create_launch_keyboard(&event_data.address, &event_data.symbol);
+
         for (&chat_id, &active) in active_users.iter() {
             if active {
-                if let Err(e) = self.send_message_with_markup(
-                    chat_id,
-                    &message,
-                    keyboard.clone(),
-                    None
-                ).await {
+                if let Err(e) = self
+                    .send_message_with_markup(chat_id, &message, keyboard.clone(), None)
+                    .await
+                {
                     eprintln!("Failed to broadcast event to {}: {:?}", chat_id, e);
                 }
             }
         }
-    
+
         Ok(())
     }
-    
-    fn create_launch_keyboard(&self, contract_address: &str, token_symbol: &str) -> serde_json::Value {
+
+    fn create_launch_keyboard(
+        &self,
+        contract_address: &str,
+        token_symbol: &str,
+    ) -> serde_json::Value {
         json!({
             "inline_keyboard": [
                 [
                     {
                         "text": "🚀 Buy $10",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=10&symbol={}", 
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=10&symbol={}",
                             self.config.dex_url, contract_address, token_symbol)
                     },
                     {
                         "text": "🚀 Buy $50",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=50&symbol={}", 
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=50&symbol={}",
                             self.config.dex_url, contract_address, token_symbol)
                     },
                     {
                         "text": "🚀 Buy $100",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=100&symbol={}", 
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=100&symbol={}",
                             self.config.dex_url, contract_address, token_symbol)
                     }
                 ],
                 [
                     {
                         "text": "💰 Custom Amount",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}", 
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}",
                             self.config.dex_url, contract_address)
                     },
                     {
@@ -220,12 +206,12 @@ impl TelegramBot {
             ]
         })
     }
-    
+
     // Helper functions for formatting
     fn format_price(&self, price: String) -> String {
         format!("{:.2}", price)
     }
-    
+
     fn format_compact_number(&self, num_str: String) -> String {
         // Try to parse the string as u64
         match num_str.parse::<u64>() {
@@ -239,7 +225,7 @@ impl TelegramBot {
                 } else {
                     num.to_string()
                 }
-            },
+            }
             Err(_) => {
                 // If parsing fails, return the original string
                 // You might want to log this error in a production environment
@@ -248,13 +234,13 @@ impl TelegramBot {
             }
         }
     }
-    
+
     fn format_percentage(&self, value_str: String) -> String {
         // Try to parse the string as f64
         match value_str.parse::<f64>() {
             Ok(value) => {
                 format!("{:.1}", value)
-            },
+            }
             Err(_) => {
                 // If parsing fails, return the original string
                 // You might want to log this error in a production environment
@@ -263,15 +249,15 @@ impl TelegramBot {
             }
         }
     }
-    
+
     fn format_short_address(&self, address: &str) -> String {
         if address.len() > 8 {
-            format!("{}...{}", &address[..6], &address[address.len()-4..])
+            format!("{}...{}", &address[..6], &address[address.len() - 4..])
         } else {
             address.to_string()
         }
     }
-    
+
     fn create_event_keyboard(&self, contract_address: &str) -> serde_json::Value {
         json!({
             "inline_keyboard": [
@@ -284,7 +270,7 @@ impl TelegramBot {
                 [
                     {
                         "text": "💱 Trade on Avnu",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}", 
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}",
                             self.config.dex_url, contract_address)
                     }
                 ]
@@ -294,7 +280,7 @@ impl TelegramBot {
 
     pub async fn handle_updates(&self) -> Result<(), Error> {
         let mut last_update_id = 0;
-        
+
         loop {
             match self.get_updates(last_update_id + 1).await {
                 Ok(updates) => {
@@ -312,7 +298,7 @@ impl TelegramBot {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             }
-            
+
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
@@ -326,32 +312,32 @@ impl TelegramBot {
                         chat_id,
                         "🚀 Welcome! You will now receive token alerts.\n\n\
                         Use /help to see available commands.",
-                        None
-                    ).await?;
+                        None,
+                    )
+                    .await?;
                 } else {
-                    self.send_message(
-                        chat_id,
-                        "✅ You are already receiving token alerts!",
-                        None
-                    ).await?;
+                    self.send_message(chat_id, "✅ You are already receiving token alerts!", None)
+                        .await?;
                 }
-            },
+            }
             "/stop" => {
                 let mut active_users = self.active_users.write().await;
                 if active_users.remove(&chat_id).is_some() {
                     self.send_message(
                         chat_id,
                         "🛑 Token alerts stopped. Use /start to resume.",
-                        None
-                    ).await?;
+                        None,
+                    )
+                    .await?;
                 } else {
                     self.send_message(
                         chat_id,
                         "❗️ You are not receiving any alerts. Use /start to begin.",
-                        None
-                    ).await?;
+                        None,
+                    )
+                    .await?;
                 }
-            },
+            }
             "/status" => {
                 let active_users = self.active_users.read().await;
                 let status = if active_users.get(&chat_id).copied().unwrap_or(false) {
@@ -360,7 +346,7 @@ impl TelegramBot {
                     "🔴 You are not receiving token alerts.\nUse /start to begin."
                 };
                 self.send_message(chat_id, status, None).await?;
-            },
+            }
             "/help" => {
                 self.send_message(
                     chat_id,
@@ -370,9 +356,10 @@ impl TelegramBot {
                     /status - Check your alert status\n\
                     /help - Show this help message\n\n\
                     ℹ️ You'll receive alerts for new tokens as they're detected.",
-                    None
-                ).await?;
-            },
+                    None,
+                )
+                .await?;
+            }
             _ => {}
         }
         Ok(())
@@ -380,18 +367,14 @@ impl TelegramBot {
 
     async fn get_updates(&self, offset: i64) -> Result<Vec<Update>, Error> {
         let url = format!("{}/getUpdates", self.base_url);
-        
+
         let params = json!({
             "offset": offset,
             "timeout": 30,
             "allowed_updates": ["message", "callback_query"]
         });
 
-        let response = self.client
-            .post(&url)
-            .json(&params)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&params).send().await?;
 
         #[derive(Deserialize)]
         struct UpdateResponse {
@@ -409,10 +392,10 @@ impl TelegramBot {
     }
 
     async fn send_message(
-        &self, 
-        chat_id: i64, 
-        text: &str, 
-        reply_to: Option<i64>
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to: Option<i64>,
     ) -> Result<(), Error> {
         let mut request = json!({
             "chat_id": chat_id,
@@ -421,18 +404,14 @@ impl TelegramBot {
         });
 
         if let Some(reply_id) = reply_to {
-            request.as_object_mut().unwrap().insert(
-                "reply_to_message_id".to_string(),
-                json!(reply_id)
-            );
+            request
+                .as_object_mut()
+                .unwrap()
+                .insert("reply_to_message_id".to_string(), json!(reply_id));
         }
 
         let url = format!("{}/sendMessage", self.base_url);
-        let response = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&request).send().await?;
 
         if !response.status().is_success() {
             eprintln!("Failed to send message: {:?}", response.text().await?);
@@ -446,7 +425,7 @@ impl TelegramBot {
         chat_id: i64,
         text: &str,
         reply_markup: serde_json::Value,
-        reply_to: Option<i64>
+        reply_to: Option<i64>,
     ) -> Result<(), Error> {
         let mut request = json!({
             "chat_id": chat_id,
@@ -456,21 +435,20 @@ impl TelegramBot {
         });
 
         if let Some(reply_id) = reply_to {
-            request.as_object_mut().unwrap().insert(
-                "reply_to_message_id".to_string(),
-                json!(reply_id)
-            );
+            request
+                .as_object_mut()
+                .unwrap()
+                .insert("reply_to_message_id".to_string(), json!(reply_id));
         }
 
         let url = format!("{}/sendMessage", self.base_url);
-        let response = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&request).send().await?;
 
         if !response.status().is_success() {
-            eprintln!("Failed to send message with markup: {:?}", response.text().await?);
+            eprintln!(
+                "Failed to send message with markup: {:?}",
+                response.text().await?
+            );
         }
 
         Ok(())
