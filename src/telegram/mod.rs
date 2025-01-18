@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::utils::event_parser::CreationEvent;
+use crate::utils::types::ekubo::Memecoin;
 use crate::EventType;
 
 #[derive(Debug, Deserialize)]
@@ -137,34 +138,38 @@ impl TelegramBot {
         Ok(())
     }
 
-    pub async fn broadcast_event(&self, event_data: EventType) -> Result<(), Error> {
+    pub async fn broadcast_event(&self, event_data: Memecoin, market_cap: String) -> Result<(), Error> {
         let active_users = self.active_users.read().await;
         
-        let mut message = "";
-
-        match event_data {
-            EventType::Creation(creation_event) => {
-                message = &format!(
-                    "🚨 *New Token Event Detected*\n\n\
-                    *Token Details*\n\
-                    Owner: `{}`\n\
-                    Name: `{}`\n\
-                    Symbol: `{}`\n\
-                    Supply: `{}`\n\
-                    Contract: `{}`\n\n\
-                    Block Number: `{}`",
-                    // event_data.data[0], // owner
-                    // event_data.data[1], // name
-                    // event_data.data[2], // symbol
-                    // event_data.data[3], // supply
-                    // event_data.data[4], // contract address
-                    // event_data.block_number
+        let message = 
+                format!(
+                    "🚨 *FRESH LAUNCH ALERT*\n\n\
+                    *{}* ({}) has landed on Starknet!\n\n\
+                    Starting MCAP: ${}\n\
+                    Supply: {}\n\
+                    Liquidity: EKUBO Pool #{}\n\
+                    Starting Tick: {}\n\
+                    Team: {}%\n\
+                    Launch Manager: `{}`\n\n\
+                    ⚡️ GET IN NOW\n\n\
+                    #Starknet #Memecoin #{}",
+                    event_data.name,
+                    event_data.symbol,
+                    self.format_price(market_cap),
+                    self.format_compact_number(event_data.total_supply),
+                    event_data.liquidity.ekubo_id,
+                    event_data.liquidity.starting_tick,
+                    self.format_percentage(event_data.launch.team_allocation),
+                    self.format_short_address(&event_data.liquidity.launch_manager),
+                    event_data.symbol
                 );
-            },
-            EventType::Launch(launch_event) => todo!(),
-        }
-        let keyboard = self.create_event_keyboard("0x0"); // Using contract address
-
+            
+    
+        let keyboard = self.create_launch_keyboard(
+            &event_data.address,
+            &event_data.symbol
+        );
+    
         for (&chat_id, &active) in active_users.iter() {
             if active {
                 if let Err(e) = self.send_message_with_markup(
@@ -177,10 +182,96 @@ impl TelegramBot {
                 }
             }
         }
-
+    
         Ok(())
     }
-
+    
+    fn create_launch_keyboard(&self, contract_address: &str, token_symbol: &str) -> serde_json::Value {
+        json!({
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "🚀 Buy $10",
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=10&symbol={}", 
+                            self.config.dex_url, contract_address, token_symbol)
+                    },
+                    {
+                        "text": "🚀 Buy $50",
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=50&symbol={}", 
+                            self.config.dex_url, contract_address, token_symbol)
+                    },
+                    {
+                        "text": "🚀 Buy $100",
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=100&symbol={}", 
+                            self.config.dex_url, contract_address, token_symbol)
+                    }
+                ],
+                [
+                    {
+                        "text": "💰 Custom Amount",
+                        "url": format!("{}/swap?inputToken=ETH&outputToken={}", 
+                            self.config.dex_url, contract_address)
+                    },
+                    {
+                        "text": "🔍 View Contract",
+                        "url": format!("{}/contract/{}", self.config.explorer_url, contract_address)
+                    }
+                ]
+            ]
+        })
+    }
+    
+    // Helper functions for formatting
+    fn format_price(&self, price: String) -> String {
+        format!("{:.2}", price)
+    }
+    
+    fn format_compact_number(&self, num_str: String) -> String {
+        // Try to parse the string as u64
+        match num_str.parse::<u64>() {
+            Ok(num) => {
+                if num >= 1_000_000_000 {
+                    format!("{:.1}B", num as f64 / 1_000_000_000.0)
+                } else if num >= 1_000_000 {
+                    format!("{:.1}M", num as f64 / 1_000_000.0)
+                } else if num >= 1_000 {
+                    format!("{:.1}K", num as f64 / 1_000.0)
+                } else {
+                    num.to_string()
+                }
+            },
+            Err(_) => {
+                // If parsing fails, return the original string
+                // You might want to log this error in a production environment
+                eprintln!("Failed to parse number string: {}", num_str);
+                num_str
+            }
+        }
+    }
+    
+    fn format_percentage(&self, value_str: String) -> String {
+        // Try to parse the string as f64
+        match value_str.parse::<f64>() {
+            Ok(value) => {
+                format!("{:.1}", value)
+            },
+            Err(_) => {
+                // If parsing fails, return the original string
+                // You might want to log this error in a production environment
+                eprintln!("Failed to parse percentage string: {}", value_str);
+                value_str
+            }
+        }
+    }
+    
+    fn format_short_address(&self, address: &str) -> String {
+        if address.len() > 8 {
+            format!("{}...{}", &address[..6], &address[address.len()-4..])
+        } else {
+            address.to_string()
+        }
+    }
+    
     fn create_event_keyboard(&self, contract_address: &str) -> serde_json::Value {
         json!({
             "inline_keyboard": [

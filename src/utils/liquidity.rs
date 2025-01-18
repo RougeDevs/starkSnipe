@@ -112,8 +112,8 @@ pub async fn get_price(pair: String, block_identifier: BlockId) -> Result<Fracti
             return Err(Box::new(AggregateError::ContractCall("Failed to decode reserve1".to_string())));
         };
 
-        println!("{}", reserve0);
-        println!("{}", reserve1);
+        // println!("{}", reserve0);
+        // println!("{}", reserve1);
 
     // Perform the fraction operation (reserve1 / reserve0) * 10^12 for scaling
     let scale = BigUint::from(10u64).pow(12);
@@ -127,7 +127,7 @@ pub fn get_initial_price(starting_tick: i64) -> f64 {
 }
 
 pub async fn parse_liquidity_params(memecoin: &EkuboMemecoin) -> Result<LiquidityParams, Box<dyn std::error::Error>> {
-    println!("{:?}", memecoin);
+    // println!("{:?}", memecoin);
     
     // Quote token info check
     let quote_token_infos = QUOTE_TOKENS.get(&memecoin.liquidity.quote_token as &str);
@@ -135,25 +135,25 @@ pub async fn parse_liquidity_params(memecoin: &EkuboMemecoin) -> Result<Liquidit
 
     // Get Ether price at launch
     let quote_token_price_at_launch = get_price(quote_token_infos.unwrap().usdc_pair.to_string(),starknet::core::types::BlockId::Number(memecoin.launch.block_number)).await?;
-    println!("{:?}", quote_token_price_at_launch);
+    // println!("{:?}", quote_token_price_at_launch);
     
     // Calculate initial price and starting market cap
     let initial_price = get_initial_price(memecoin.liquidity.starting_tick);
-    println!("{:?}", initial_price);
+    // println!("{:?}", initial_price);
     
     // Now we can safely convert the scaled price to BigUint
     let price = BigUint::from_f64(initial_price).unwrap();
 
-    println!("{:?}", price);
+    // println!("{:?}", price);
 
     let starting_mcap = if is_quote_token_safe {
 
         let supply = Fraction::new(memecoin.total_supply.clone(), Some(BigUint::from(1u64)))?;
-        println!("{:?}", supply);
+        // println!("{:?}", supply);
         let decimals = Fraction::new(BigUint::from(10u64.pow(DECIMALS as u32)), Some(BigUint::from(1u64)))?* Fraction::new(BigUint::from(10u64).pow(48), Some(BigUint::one()))?;
-        println!("{:?}", decimals);
+        // println!("{:?}", decimals);
         let price_fraction = Fraction::new(price, Some(BigUint::one()))?* Fraction::new(BigUint::from(10u64).pow(DECIMALS), Some(BigUint::one()))?;
-        println!("{:?}", price_fraction);
+        // println!("{:?}", price_fraction);
         Some((price_fraction * quote_token_price_at_launch *supply)
                            /decimals)
     } else {
@@ -162,12 +162,12 @@ pub async fn parse_liquidity_params(memecoin: &EkuboMemecoin) -> Result<Liquidit
 
     let starting_mcap_value = starting_mcap.unwrap()?;
 
-    println!("{:?}", starting_mcap_value.to_formatted_string());
+    // println!("{:?}", starting_mcap_value.to_formatted_string());
 
     // Format the starting market cap
     let parsed_starting_mcap = starting_mcap_value.to_significant_digits(0, Rounding::RoundDown)?;
 
-    println!("{}", parsed_starting_mcap);
+    // println!("{}", parsed_starting_mcap);
 
     Ok(LiquidityParams {
         is_quote_token_safe,

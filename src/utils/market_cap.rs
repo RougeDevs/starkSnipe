@@ -68,7 +68,7 @@ pub async fn calculate_market_cap(
     // Try to get quote with better error handling
     let response = match get_ekubo_quote(amount, "USDT", &symbol).await {
         Ok(response) => {
-            println!("Received quote: {:?}", response);
+            // println!("Received quote: {:?}", response);
             response
         }
         Err(err) => {

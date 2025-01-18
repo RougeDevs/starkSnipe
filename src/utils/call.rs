@@ -45,17 +45,13 @@ pub enum AggregateError {
 }
 
 pub async fn get_aggregate_call_data(address: &str) -> Result<Memecoin, AggregateError> {
-    println!("Entering aggregate call data");
-
     // Create provider with error handling
     let provider = JsonRpcClient::new(HttpTransport::new(
         Url::parse("https://starknet-mainnet.public.blastapi.io/rpc/v0_7")
             .map_err(AggregateError::Url)?,
     ));
 
-    println!("provider {:?}", provider);
     let calls = generate_calls(address);
-    println!("calls {:?}", calls);
     // Make contract call with error handling
     let call_result = match provider
         .call(
@@ -81,23 +77,17 @@ pub async fn get_aggregate_call_data(address: &str) -> Result<Memecoin, Aggregat
             )));
         }
     };
-    println!("Call result \n {:?}", call_result);
-
     // Parse results with error handling
     let parsed_result = parse_call_result(address, call_result).await;
 
     Ok(parsed_result.unwrap())
 }
 
-fn generate_calls(address: &str) -> Vec<Felt> {
-    println!("Generating calls for address: {}", address);
-    
-    // Initialize with number of calls we'll make
-    // Using a direct number instead of Felt::from(10) to avoid potential overflow
-    let mut calls: Vec<Felt> = vec![Felt::from_dec_str("10").unwrap()];
+fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
+    let mut calls: Vec<Felt> = vec![Felt::from(10)];
 
     let factory_address = MEMECOIN_FACTORY_ADDRESS;
-    let ekubo_id = "1"; // Keep as string to avoid conversion issues
+    let ekubo_id: String = 1.to_string();
 
     let factory_calls = [
         ("is_memecoin", Selector::IsMemecoin),
@@ -105,30 +95,18 @@ fn generate_calls(address: &str) -> Vec<Felt> {
         ("locked_liquidity", Selector::LockedLiquidity),
     ];
 
-    // Process factory calls
     for (name, selector) in factory_calls {
-        println!("Processing factory call: {}", name);
-        
-        // Add factory address
         calls.push(Felt::from_hex_unchecked(factory_address));
-        
-        // Add selector
-        let selector_str = selector_to_str(selector);
-        calls.push(get_selector_from_name(&selector_str).unwrap());
-        
-        // Add argument count (1)
+        calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
         calls.push(Felt::ONE);
-        
-        // Add the specific argument based on call type
-        if name == "exchange" {
-            calls.push(Felt::from_dec_str(ekubo_id)
-                .unwrap_or_else(|_| panic!("Invalid ekubo_id: {}", ekubo_id)));
+        calls.push(if name == "exchange" {
+            Felt::from_dec_str(&ekubo_id).unwrap()
         } else {
-            calls.push(Felt::from_hex_unchecked(address));
-        }
+            Felt::from_hex_unchecked(address)
+        });
     }
 
-    // Process coin-specific calls
+    // Add other calls with detailed logging
     let coin_calls = [
         ("name", Selector::Name),
         ("symbol", Selector::Symbol),
@@ -136,27 +114,19 @@ fn generate_calls(address: &str) -> Vec<Felt> {
         ("owner", Selector::Owner),
         ("launched_block", Selector::LaunchedAtBlockNumber),
         ("team_allocation", Selector::GetTeamAllocation),
-        ("liquidity_params", Selector::LaunchedWithLiquidityParameters),
+        (
+            "liquidity_params",
+            Selector::LaunchedWithLiquidityParameters,
+        ),
     ];
 
     for (name, selector) in coin_calls {
-        println!("Processing coin call: {}", name);
-        
-        // Add coin address
         calls.push(Felt::from_hex_unchecked(address));
-        
-        // Add selector
-        let selector_str = selector_to_str(selector);
-        calls.push(get_selector_from_name(&selector_str).unwrap());
-        
-        // Add argument count (0)
+        calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
         calls.push(Felt::ZERO);
     }
-
-    println!("Generated {} calls", calls.len());
     calls
 }
-
 async fn parse_call_result(
     address: &str,
     call_result: Vec<Felt>,
