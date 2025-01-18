@@ -89,12 +89,15 @@ pub async fn get_aggregate_call_data(address: &str) -> Result<Memecoin, Aggregat
     Ok(parsed_result.unwrap())
 }
 
-fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
-    println!("entering generate_calls");
-    let mut calls: Vec<Felt> = vec![Felt::from(10)];
+fn generate_calls(address: &str) -> Vec<Felt> {
+    println!("Generating calls for address: {}", address);
+    
+    // Initialize with number of calls we'll make
+    // Using a direct number instead of Felt::from(10) to avoid potential overflow
+    let mut calls: Vec<Felt> = vec![Felt::from_dec_str("10").unwrap()];
 
     let factory_address = MEMECOIN_FACTORY_ADDRESS;
-    let ekubo_id: String = 1.to_string();
+    let ekubo_id = "1"; // Keep as string to avoid conversion issues
 
     let factory_calls = [
         ("is_memecoin", Selector::IsMemecoin),
@@ -102,18 +105,30 @@ fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
         ("locked_liquidity", Selector::LockedLiquidity),
     ];
 
+    // Process factory calls
     for (name, selector) in factory_calls {
+        println!("Processing factory call: {}", name);
+        
+        // Add factory address
         calls.push(Felt::from_hex_unchecked(factory_address));
-        calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
+        
+        // Add selector
+        let selector_str = selector_to_str(selector);
+        calls.push(get_selector_from_name(&selector_str).unwrap());
+        
+        // Add argument count (1)
         calls.push(Felt::ONE);
-        calls.push(if name == "exchange" {
-            Felt::from_dec_str(&ekubo_id).unwrap()
+        
+        // Add the specific argument based on call type
+        if name == "exchange" {
+            calls.push(Felt::from_dec_str(ekubo_id)
+                .unwrap_or_else(|_| panic!("Invalid ekubo_id: {}", ekubo_id)));
         } else {
-            Felt::from_hex_unchecked(address)
-        });
+            calls.push(Felt::from_hex_unchecked(address));
+        }
     }
 
-    // Add other calls with detailed logging
+    // Process coin-specific calls
     let coin_calls = [
         ("name", Selector::Name),
         ("symbol", Selector::Symbol),
@@ -121,19 +136,27 @@ fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
         ("owner", Selector::Owner),
         ("launched_block", Selector::LaunchedAtBlockNumber),
         ("team_allocation", Selector::GetTeamAllocation),
-        (
-            "liquidity_params",
-            Selector::LaunchedWithLiquidityParameters,
-        ),
+        ("liquidity_params", Selector::LaunchedWithLiquidityParameters),
     ];
 
     for (name, selector) in coin_calls {
+        println!("Processing coin call: {}", name);
+        
+        // Add coin address
         calls.push(Felt::from_hex_unchecked(address));
-        calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
+        
+        // Add selector
+        let selector_str = selector_to_str(selector);
+        calls.push(get_selector_from_name(&selector_str).unwrap());
+        
+        // Add argument count (0)
         calls.push(Felt::ZERO);
     }
+
+    println!("Generated {} calls", calls.len());
     calls
 }
+
 async fn parse_call_result(
     address: &str,
     call_result: Vec<Felt>,

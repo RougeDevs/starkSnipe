@@ -73,10 +73,12 @@ async fn main() {
 async fn process_event(event: Event) -> Result<()> {
     let event_selector = event.keys.first().context("No event selector")?;
     let event_data: Vec<Felt> = event.data.iter().map(apibara_field_as_felt).collect();
-    println!("event_selector: {}", event_selector);
-    println!("LAUNCH EVENT: {}", &*LAUNCH_EVENT);
     match event_selector {
-        selector if selector == &*LAUNCH_EVENT => {
+        selector if *selector == *CREATION_EVENT => {
+            println!("New creation event: {:?}\n", event.from_address);
+        }
+
+        selector if *selector == *LAUNCH_EVENT => {
             println!("Got Launch Event: {:?}", event.from_address);
             let mut coin_data = Default::default();
             let decoded_data = decode_launch_data(event_data).await?;
