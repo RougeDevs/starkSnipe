@@ -1,7 +1,5 @@
 use std::collections::HashSet;
 
-use anyhow::Ok;
-
 use super::call::{get_aggregate_call_data, get_balance, validate_memecoins};
 use super::market_cap::calculate_market_cap;
 use super::types::common::{
@@ -178,4 +176,81 @@ pub async fn get_account_holding_info(
         account_balance,
         usd_value: usd_value_str,
     })
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use dotenv::dotenv;
+
+    async fn setup() {
+        dotenv().ok();
+        // Ensure required environment variables are set
+        env::var("EXPLORER_API").expect("EXPLORER_API must be set");
+        env::var("EKUBO_CORE_ADDRESS").expect("EKUBO_CORE_ADDRESS must be set");
+    }
+
+    #[tokio::test]
+    async fn test_get_account_holding_info_live() {
+        // Set up environment
+        setup().await;
+
+        // Use real addresses from the network
+        let address = "0x0360fb3a51bd291e5db0892b6249918a5689bc61760adcb350fe39cd725e1d22";
+        let token_address = "0x467d10bcba8803372f22fc5bea08c1ba780abaef320a29ca45b8086e2c35070";
+
+        match get_account_holding_info(address, token_address).await {
+            Ok(info) => {
+                // Basic validation of returned data
+                println!("Token Information:");
+                println!("Name: {}", info.coin_info.name);
+                println!("Symbol: {}", info.coin_info.symbol);
+                println!("Balance: {}", info.account_balance);
+                println!("USD Value: ${}", info.usd_value);
+                println!("Token Price: ${}", info.coin_info.price);
+                println!("Market Cap: ${}", info.coin_info.market_cap);
+                println!("DEX Liquidity: ${}", info.coin_info.usd_dex_liquidity);
+            }
+            Err(e) => {
+                panic!("Test failed with error: {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fetch_account_holdings() {
+        setup().await;
+
+        let address = "0x0360fb3a51bd291e5db0892b6249918a5689bc61760adcb350fe39cd725e1d22";
+
+        match fetch_account_holdings(address).await {
+            Ok(info) => {
+                println!("account holdings ---> ");
+                println!("{:?}", info.len());
+            }
+            Err(e) => {
+                panic!("Test failed with error: {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_info() {
+        setup().await;
+
+        let token_address = "0x467d10bcba8803372f22fc5bea08c1ba780abaef320a29ca45b8086e2c35070";
+
+        match aggregate_info(token_address).await {
+            Ok(info) => {
+                println!("memecoin info ---> \n {:?}", info.0);
+                println!("tokencategory Response ---> \n {:?}", info.1);
+            }
+            Err(error) => {
+                panic!("Test failed with error: {}", error);
+            }
+        }
+    }
+
 }

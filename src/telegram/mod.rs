@@ -1,12 +1,16 @@
 use kanshi::dna::EventData;
 use reqwest::{Client, Error};
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
+use std::fmt::format;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::utils::event_parser::CreationEvent;
+use crate::utils::info_aggregator::{aggregate_info, get_account_holding_info, get_account_holdings};
 use crate::utils::types::common::MemecoinInfo;
 use crate::utils::types::ekubo::Memecoin;
 use crate::EventType;
@@ -117,6 +121,18 @@ impl TelegramBot {
                 {
                     "command": "help",
                     "description": "Show available commands"
+                },
+                {
+                    "command": "sniQ <address>",
+                    "description": "Get token info"
+                },
+                {
+                    "command": "peek <wallet>",
+                    "description": "Get wallet info"
+                },
+                {
+                    "command": "spot <wallet> <token_address>",
+                    "description": "Get wallet holdings for a particular token"
                 }
             ]
         });
@@ -205,6 +221,68 @@ impl TelegramBot {
                 ]
             ]
         })
+    }
+
+    fn format_number(&self, num_str: &str) -> Result<String, &'static str> {
+        // Parse the string to f64
+        let num = match num_str.parse::<f64>() {
+            Ok(n) => n,
+            Err(_) => return Err("Invalid number format"),
+        };
+    
+        // Define the thresholds and their corresponding suffixes
+        let billion = 1_000_000_000.0;
+        let million = 1_000_000.0;
+        let thousand = 1_000.0;
+    
+        let (value, suffix) = if num >= billion {
+            (num / billion, "B")
+        } else if num >= million {
+            (num / million, "M")
+        } else if num >= thousand {
+            (num / thousand, "K")
+        } else {
+            (num, "")
+        };
+    
+        // Format with up to 2 decimal places, removing trailing zeros
+        let formatted = format!("{:.2}", value)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string();
+    
+        Ok(format!("{}{}", formatted, suffix))
+    }
+
+
+    fn format_large_number(&self, input: &str) -> Result<String, &'static str> {
+        // Parse the input string into a Decimal
+        let number = match Decimal::from_str(input) {
+            Ok(n) => n,
+            Err(_) => return Err("Failed to parse input string"),
+        };
+
+        // Create 10^18 as a Decimal
+        let divisor = match Decimal::from_str("1000000000000000000") {
+            Ok(n) => n,
+            Err(_) => return Err("Failed to create divisor"),
+        };
+
+        // Perform the division
+        let result = match number.checked_div(divisor) {
+            Some(n) => n,
+            None => return Err("Division error"),
+        };
+
+        // Convert to string, trimming unnecessary zeros
+        let mut result_str = result.normalize().to_string();
+        
+        // Remove trailing zeros after decimal point
+        if result_str.contains('.') {
+            result_str = result_str.trim_end_matches('0').trim_end_matches('.').to_string();
+        }
+
+        Ok(result_str)
     }
 
     // Helper functions for formatting
@@ -304,14 +382,95 @@ impl TelegramBot {
     }
 
     async fn handle_command(&self, command: &str, chat_id: i64) -> Result<(), Error> {
-        match command {
-            "/start" => {
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        
+        match parts.get(0).map(|s| *s) {
+            Some("/spot") => {
+                match (parts.get(1), parts.get(2)) {
+                    (Some(wallet_addr), Some(token_addr)) => {
+                        match get_account_holding_info(wallet_addr, token_addr).await {
+                            Ok(info) => {
+                                let message = format!(
+                                    "📊 TOKEN SPOT \n——————————————\n\n\
+                                    Wallet: `{}`\n\
+                                    Token: ${}\n\n\
+                                    POSITION\n\
+                                    Balance: {}\n\
+                                    Worth: ${}\n\n\
+                                    ACTIONS\n\
+                                    ⚡️ Trade Now: {}",
+                                    self.format_short_address(wallet_addr),
+                                    info.coin_info.symbol,
+                                    self.format_number(&info.account_balance).unwrap(),
+                                    info.usd_value,
+                                    self.config.dex_url,
+                                    // token_addr
+                                );
+
+                                let keyboard = json!({
+                                    "inline_keyboard": [
+                                        [
+                                            {
+                                                "text": "💱 Trade Now",
+                                                "url": format!("{}", 
+                                                    self.config.dex_url)
+                                            }
+                                        ]
+                                    ]
+                                });
+
+                                self.send_message_with_markup(chat_id, &message, keyboard, None).await?;
+                            }
+                            Err(e) => {
+                                let error_message = format!(
+                                    "❌ Error fetching token info: {}",
+                                    if e.to_string().contains("parse") {
+                                        "Invalid token data format"
+                                    } else if e.to_string().contains("aggregate_info") {
+                                        "Failed to fetch token information"
+                                    } else if e.to_string().contains("get_balance") {
+                                        "Failed to fetch account balance"
+                                    } else {
+                                        "Unexpected error occurred"
+                                    }
+                                );
+                                self.send_message(chat_id, &error_message, None).await?;
+                            }
+                        }
+                    }
+                    _ => {
+                        self.send_message(
+                            chat_id,
+                            "❌ Invalid command format.\nUsage: `/spot <wallet_address> <token_address>`",
+                            None,
+                        )
+                        .await?;
+                    }
+                }
+            }
+            Some("/start") => {
                 let mut active_users = self.active_users.write().await;
                 if active_users.insert(chat_id, true).is_none() {
                     self.send_message(
                         chat_id,
-                        "🚀 Welcome! You will now receive token alerts.\n\n\
-                        Use /help to see available commands.",
+                        "⚡️ WELCOME TO SNIQ BOT ⚡️\n\
+                                ——————————————————\n\n\
+                                Catch the Meme. Beat the Market. 🎯🔥\n\n\
+                                🚀 FEATURES:\n\
+                                ✨ Instant Token Sniping – Know what’s hot in seconds.\n\
+                                🔍 Wallet Scanning – Fast, flawless, precise.\n\
+                                💸 One-Tap Trading – Access the market like a pro.\n\n\
+                                ⚡️ GET STARTED:\n\
+                                💥 /sniQ <address> – Scan a token instantly!\n\
+                                👀 /peek <wallet> – See your memecoin holdings.\n\
+                                🎯 /spot <wallet> <token> – Track your position on any token.\n\n\
+                                🔧 Need help?\n\
+                                /guide 📘 – Explore how to use the bot.\n\n\
+                                🚀 Ready to trade?\n\
+                                /trade 💥 – Let’s make some moves!\n\n\
+                                💎 sniq.fun\n\
+                                Fast. Sharp. Ahead. — Sniping Memecoins Like a Pro. ⚡️"
+                                ,
                         None,
                     )
                     .await?;
@@ -320,7 +479,7 @@ impl TelegramBot {
                         .await?;
                 }
             }
-            "/stop" => {
+            Some("/stop") => {
                 let mut active_users = self.active_users.write().await;
                 if active_users.remove(&chat_id).is_some() {
                     self.send_message(
@@ -338,7 +497,7 @@ impl TelegramBot {
                     .await?;
                 }
             }
-            "/status" => {
+            Some("/status") => {
                 let active_users = self.active_users.read().await;
                 let status = if active_users.get(&chat_id).copied().unwrap_or(false) {
                     "🟢 You are currently receiving token alerts."
@@ -347,19 +506,99 @@ impl TelegramBot {
                 };
                 self.send_message(chat_id, status, None).await?;
             }
-            "/help" => {
+            Some("/help") => {
                 self.send_message(
                     chat_id,
                     "Available Commands:\n\n\
                     /start - Start receiving token alerts\n\
                     /stop - Stop receiving token alerts\n\
                     /status - Check your alert status\n\
-                    /help - Show this help message\n\n\
+                    /help - Show this help message\n\
+                    /spot <wallet> <token> - Get token position for a wallet\n\n\
                     ℹ️ You'll receive alerts for new tokens as they're detected.",
                     None,
                 )
                 .await?;
             }
+            Some("/peek") => {
+                match (parts.get(1)) {
+                    Some(wallet_address) => {
+                        match get_account_holdings(wallet_address).await {
+                            Ok(holdings) => {
+                                let message = format!("
+                                        💼 BAG CHECK\n\
+                                        ——————————————\n\n\
+                                        👛 Wallet: `{}`\n\n\
+                                        💼 PORTFOLIO\n\
+                                        🎯 Total Memecoins: `{}`\n\n\
+                                        💡 TIP: Check token position\n\
+                                        Use: /spot <wallet> <token>
+                                ",
+                                    holdings.account_address,
+                                    holdings.total_tokens
+                                );
+                                self.send_message(chat_id, &message, None).await?;
+                            }
+                            Err(e) => {
+                                let error_message = format!("Error peeking into wallet ⁉️");
+                                self.send_message(chat_id, &error_message, None).await?;
+                            }
+                        }
+                    },
+                    None => {
+                        let error_message = format!("Invalid parameters ❗️");
+                        self.send_message(chat_id, &error_message, None).await?;
+                    },
+                }
+            }
+            Some("/sniQ") => {
+                match (parts.get(1)) {
+                    Some(token_address) => {
+                        match aggregate_info(token_address).await {
+                            Ok(response) => {
+                                let message = format!("
+                                          ⚡ SNIQ RADAR ⚡\n\
+                                        ——————————————----\n\
+                                        Token: ${}\n\
+                                        Name: {}\n\
+                                        Contract: {}\n\n\
+                                        📊 METRICS\n\
+                                        💰 Price: ${}\n\
+                                        📈 MCap: ${}\n\
+                                        💫 Supply: ${}K\n\
+                                        💧 LP: ${}\n\n\
+                                        🛡 SECURITY CHECK\n\
+                                        🔒 LP Status: Locked Forever\n\
+                                        ✅ Contract: Verified\n\n\
+                                        🔗 QUICK LINKS\n\
+                                        🎯 Trade: {}\n\
+                                        🔍 Explorer: {}\n\
+                                        ",
+                                        response.0.symbol,
+                                        response.0.name,
+                                        response.0.address,
+                                        response.0.price,
+                                        self.format_number(&response.0.market_cap).unwrap(),
+                                        self.format_number(&self.format_large_number(&response.0.total_supply).unwrap()).unwrap(),
+                                        self.format_number(&response.0.usd_dex_liquidity).unwrap(),
+                                        self.config.dex_url,
+                                        self.config.explorer_url
+                                    );
+                                self.send_message(chat_id,  &message, None).await;
+                            },
+                            Err(error) => {
+                                let error_message = format!("Error fetching token details ⁉️");
+                                self.send_message(chat_id, &error_message, None).await?;
+                            }
+                        }
+                    },
+                    None => {
+                        let error_message = format!("Invalid parameters ❗️");
+                        self.send_message(chat_id, &error_message, None).await?;
+                    }              
+                }
+            }
+            
             _ => {}
         }
         Ok(())

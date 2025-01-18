@@ -27,4 +27,5 @@ tracing = "0.1.41"
 backtrace = "0.3.74"
 num-integer = "0.1.46"
 kanshi = { git = "ssh://git@github.com/RougeDevs/kanshi.git", branch = "fix/handle-event-simplified", version = "0.1.0" }
+rust_decimal = "1.36.0"
 
