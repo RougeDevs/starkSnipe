@@ -401,7 +401,7 @@ impl TelegramBot {
                                     ⚡️ Trade Now: {}",
                                     self.format_short_address(wallet_addr),
                                     info.coin_info.symbol,
-                                    self.format_number(&info.account_balance).unwrap(),
+                                    self.format_number(&self.format_large_number(&info.account_balance).unwrap()).unwrap(),
                                     info.usd_value,
                                     self.config.dex_url,
                                     // token_addr
