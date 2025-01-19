@@ -8,6 +8,7 @@ use std::fmt::format;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use rust_decimal::prelude::*;
 
 use crate::utils::event_parser::CreationEvent;
 use crate::utils::info_aggregator::{aggregate_info, get_account_holding_info, get_account_holdings};
@@ -162,7 +163,7 @@ impl TelegramBot {
             event_data.name,
             event_data.symbol,
             self.format_price(event_data.market_cap),
-            self.format_compact_number(event_data.total_supply),
+            self.format_number(&self.format_large_number(&event_data.total_supply).unwrap()).unwrap(),
             event_data.usd_dex_liquidity,
             self.format_percentage(event_data.team_allocation),
             event_data.symbol
@@ -194,29 +195,25 @@ impl TelegramBot {
                 [
                     {
                         "text": "🚀 Buy $10",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=10&symbol={}",
+                        "url": format!("{}?token={}&amount=10&symbol={}",
                             self.config.dex_url, contract_address, token_symbol)
                     },
                     {
                         "text": "🚀 Buy $50",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=50&symbol={}",
+                        "url": format!("{}?token={}&amount=50&symbol={}",
                             self.config.dex_url, contract_address, token_symbol)
                     },
                     {
                         "text": "🚀 Buy $100",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}&amount=100&symbol={}",
+                        "url": format!("{}?token={}&amount=100&symbol={}",
                             self.config.dex_url, contract_address, token_symbol)
                     }
                 ],
                 [
                     {
                         "text": "💰 Custom Amount",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}",
+                        "url": format!("{}?token={}",
                             self.config.dex_url, contract_address)
-                    },
-                    {
-                        "text": "🔍 View Contract",
-                        "url": format!("{}/contract/{}", self.config.explorer_url, contract_address)
                     }
                 ]
             ]
@@ -256,61 +253,60 @@ impl TelegramBot {
 
 
     fn format_large_number(&self, input: &str) -> Result<String, &'static str> {
-        // Parse the input string into a Decimal
-        let number = match Decimal::from_str(input) {
-            Ok(n) => n,
-            Err(_) => return Err("Failed to parse input string"),
-        };
+        // Validate input is numeric
+    if !input.chars().all(|c| c.is_digit(10)) {
+        return Err("Invalid input: must contain only digits");
+    }
 
-        // Create 10^18 as a Decimal
-        let divisor = match Decimal::from_str("1000000000000000000") {
-            Ok(n) => n,
-            Err(_) => return Err("Failed to create divisor"),
-        };
-
-        // Perform the division
-        let result = match number.checked_div(divisor) {
-            Some(n) => n,
-            None => return Err("Division error"),
-        };
-
-        // Convert to string, trimming unnecessary zeros
-        let mut result_str = result.normalize().to_string();
-        
-        // Remove trailing zeros after decimal point
-        if result_str.contains('.') {
-            result_str = result_str.trim_end_matches('0').trim_end_matches('.').to_string();
+    let input_len = input.len();
+    
+    // If input is less than 18 digits, we need to add decimal places
+    if input_len < 18 {
+        let zeros_needed = 18 - input_len;
+        let mut result = "0.".to_string();
+        // Add necessary leading zeros
+        for _ in 0..zeros_needed {
+            result.push('0');
         }
-
-        Ok(result_str)
+        result.push_str(input.trim_start_matches('0'));
+        if result == "0." {
+            return Ok("0".to_string());
+        }
+        return Ok(result.trim_end_matches('0').trim_end_matches('.').to_string());
+    }
+    
+    // If input is exactly 18 digits, result is 1
+    if input_len == 18 {
+        return Ok("1".to_string());
+    }
+    
+    // If input is more than 18 digits, we need to place a decimal point
+    let decimal_position = input_len - 18;
+    let mut result = input[0..decimal_position].to_string();
+    let fraction = &input[decimal_position..];
+    
+    if fraction != "000000000000000000" {
+        result.push('.');
+        result.push_str(fraction.trim_end_matches('0'));
+    }
+    
+    // Remove leading zeros and handle special case
+    result = result.trim_start_matches('0').to_string();
+    if result.is_empty() || result.starts_with('.') {
+        result = format!("0{}", result);
+    }
+    
+    // Remove trailing decimal if it exists
+    if result.ends_with('.') {
+        result.pop();
+    }
+    
+    Ok(result)
     }
 
     // Helper functions for formatting
     fn format_price(&self, price: String) -> String {
         format!("{:.2}", price)
-    }
-
-    fn format_compact_number(&self, num_str: String) -> String {
-        // Try to parse the string as u64
-        match num_str.parse::<u64>() {
-            Ok(num) => {
-                if num >= 1_000_000_000 {
-                    format!("{:.1}B", num as f64 / 1_000_000_000.0)
-                } else if num >= 1_000_000 {
-                    format!("{:.1}M", num as f64 / 1_000_000.0)
-                } else if num >= 1_000 {
-                    format!("{:.1}K", num as f64 / 1_000.0)
-                } else {
-                    num.to_string()
-                }
-            }
-            Err(_) => {
-                // If parsing fails, return the original string
-                // You might want to log this error in a production environment
-                eprintln!("Failed to parse number string: {}", num_str);
-                num_str
-            }
-        }
     }
 
     fn format_percentage(&self, value_str: String) -> String {
@@ -334,26 +330,6 @@ impl TelegramBot {
         } else {
             address.to_string()
         }
-    }
-
-    fn create_event_keyboard(&self, contract_address: &str) -> serde_json::Value {
-        json!({
-            "inline_keyboard": [
-                [
-                    {
-                        "text": "🔍 View on Explorer",
-                        "url": format!("{}/contract/{}", self.config.explorer_url, contract_address)
-                    }
-                ],
-                [
-                    {
-                        "text": "💱 Trade on Avnu",
-                        "url": format!("{}/swap?inputToken=ETH&outputToken={}",
-                            self.config.dex_url, contract_address)
-                    }
-                ]
-            ]
-        })
     }
 
     pub async fn handle_updates(&self) -> Result<(), Error> {
@@ -401,7 +377,7 @@ impl TelegramBot {
                                     ⚡️ Trade Now: {}",
                                     self.format_short_address(wallet_addr),
                                     info.coin_info.symbol,
-                                    self.format_number(&self.format_large_number(&info.account_balance).unwrap()).unwrap(),
+                                    self.format_large_number(&info.account_balance).unwrap(),
                                     info.usd_value,
                                     self.config.dex_url,
                                     // token_addr
@@ -565,7 +541,7 @@ impl TelegramBot {
                                         📊 METRICS\n\
                                         💰 Price: ${}\n\
                                         📈 MCap: ${}\n\
-                                        💫 Supply: ${}K\n\
+                                        💫 Supply: ${}\n\
                                         💧 LP: ${}\n\n\
                                         🛡 SECURITY CHECK\n\
                                         🔒 LP Status: Locked Forever\n\
