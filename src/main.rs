@@ -1,88 +1,144 @@
-use std::time::Duration;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use apibara_core::starknet::v1alpha2::{Event, FieldElement};
 use dotenv::dotenv;
+use kanshi::{
+    config::Config,
+    dna::IndexerService,
+    utils::conversions::{apibara_field_as_felt, felt_as_apibara_field},
+};
+use starknet::core::utils::get_selector_from_name;
+use starknet_core::types::Felt;
+use telegram::{TelegramBot, TelegramConfig};
+use tokio::sync::mpsc;
+use tokio::task;
+use utils::{
+    event_parser::{CreationEvent, FromStarknetEventData, LaunchEvent},
+    info_aggregator::aggregate_info,
+};
 
-use provider::{Monitor, StarknetProviderError, StarknetProviderOptions};
-use reqwest::{header::{HeaderMap, HeaderValue}, Error as ReqwestError};
-use starknet::core::types::{BlockId, EventFilter, Felt};
-use telegram::TelegramBot;
-use tokio::runtime::Builder;
-use url::Url;
-
-mod provider;
+mod constant;
 mod telegram;
+mod utils;
+
+lazy_static::lazy_static! {
+    pub static ref CREATION_EVENT: FieldElement = felt_as_apibara_field(&get_selector_from_name("MemecoinCreated").unwrap());
+    pub static ref LAUNCH_EVENT: FieldElement = felt_as_apibara_field(&get_selector_from_name("MemecoinLaunched").unwrap());
+}
 
 #[derive(Debug)]
-enum AppError {
-    Provider(StarknetProviderError),
-    Reqwest(ReqwestError),
-    Telegram(String),
-    Url(url::ParseError),
-    Other(String),
+enum EventType {
+    Creation(CreationEvent),
+    Launch(LaunchEvent),
 }
 
-// Implement conversions from specific errors to AppError
-impl From<StarknetProviderError> for AppError {
-    fn from(err: StarknetProviderError) -> Self {
-        AppError::Provider(err)
-    }
-}
+#[tokio::main]
+async fn main() {
+    dotenv().ok();
 
-impl From<ReqwestError> for AppError {
-    fn from(err: ReqwestError) -> Self {
-        AppError::Reqwest(err)
-    }
-}
+    let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
 
-
-async fn run_monitor() -> Result<(), AppError> {
-    let url = Url::parse("https://starknet-mainnet.infura.io/v3/edd0fd50d7d948d58c513f38e5622da2").unwrap();
-    let mut headers = HeaderMap::new();
-    let hex_address = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
-    let address = Felt::from_hex(hex_address).unwrap();
-    
-    headers.insert(
-        "Authorization", 
-        HeaderValue::from_static("edd0fd50d7d948d58c513f38e5622da2")
-    );
-    
-    let options = StarknetProviderOptions {
-        timeout: Duration::from_secs(30),
-        headers
-    };
-    
-    let listener = Monitor::new(url, options).expect("Failed to start monitor");
-    // let transfer_selector = get_selector_from_name("Transfer").unwrap();
-    
-    let filter = EventFilter {
-        from_block: Some(BlockId::Number(1100)),
-        to_block: None,
-        address: Some(address),
-        keys: Some(vec![]),
-    };
-
-    listener.listen_for_events(filter, |events| {
-        for event in events.events {
-            println!("New event received:");
-            println!("  From address: {:?}", event.from_address);
-            println!("  Block number: {:?}", event.block_number);
-            println!("  Transaction hash: {:?}", event.transaction_hash);
-            println!("  Data: {:?}", event.data);
+    // Load configurations
+    let config = match Config::new() {
+        Ok(config) => {
+            println!("Configurations loaded ✓");
+            config
         }
-    }).await?;
+        Err(e) => {
+            eprintln!("Failed to load configuration ❗️ {}", e);
+            return;
+        }
+    };
+
+    // Create the IndexerService instance
+    let service = IndexerService::new(config);
+
+    // Initialize Telegram bot
+    let tg_config = TelegramConfig::new();
+    let tg_bot = match TelegramBot::new(tg_config) {
+        Ok(bot) => {
+            println!("Telegram bot initialized ✓");
+            Arc::new(bot)
+        }
+        Err(e) => {
+            eprintln!("Failed to initialize Telegram bot ❗️ {}", e);
+            return;
+        }
+    };
+
+    // Initialize the bot
+    if let Err(e) = tg_bot.initialize().await {
+        eprintln!("Failed to initialize Telegram bot commands ❗️ {}", e);
+        return;
+    }
+
+    // Create Arc clones for different tasks
+    let tg_bot_updates = Arc::clone(&tg_bot);
+    let tg_bot_events = Arc::clone(&tg_bot);
+
+    // Spawn Telegram bot handler in a separate task
+    let telegram_handle = task::spawn(async move {
+        if let Err(e) = tg_bot_updates.handle_updates().await {
+            eprintln!("Error running Telegram bot ❗️ {}", e);
+        }
+    });
+
+    // Spawn the indexer service in a separate task
+    let indexer_handle = task::spawn(async move {
+        if let Err(e) = service.await.run_forever_simplified(&tx).await {
+            eprintln!("Error running Indexer ❗️ {:#}", e);
+        }
+    });
+
+    // Spawn the event consumer in a separate task
+    let consumer_handle = task::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if let Err(e) = process_event(event, &tg_bot_events).await {
+                eprintln!("Error processing event ❗️ {}", e);
+            }
+        }
+    });
+
+    // Wait for both tasks to complete
+    tokio::select! {
+        _ = indexer_handle => println!("Indexer task completed"),
+        _ = consumer_handle => println!("Consumer task completed"),
+    }
+}
+
+async fn process_event(event: Event, tg_bot: &Arc<TelegramBot>) -> Result<()> {
+    let event_selector = event.keys.first().context("No event selector")?;
+    let event_data: Vec<Felt> = event.data.iter().map(apibara_field_as_felt).collect();
+    match event_selector {
+        selector if *selector == *CREATION_EVENT => {
+            println!("New creation event: {:?}\n", event.from_address);
+        }
+
+        selector if *selector == *LAUNCH_EVENT => {
+            let decoded_data = decode_launch_data(event_data).await?;
+            match aggregate_info(&decoded_data.memecoin_address.to_hex_string()).await {
+                Ok(data) => {
+                    println!("{:?}", data.0);
+                    if let Err(err) = tg_bot.broadcast_event(data.0).await {
+                        println!("------- [Error] Telegram -------");
+                        println!("{:?}", err)
+                    }
+                }
+                Err(err) => {
+                    println!("------- [Error] Aggregate Call -------");
+                    println!("{:?}", err)
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
 
     Ok(())
 }
 
-fn main() -> Result<(),AppError> {
-    dotenv().ok();
-    let rt = Builder::new_multi_thread().enable_all().build().unwrap();
-    // rt.block_on(run_monitor())?;
-
-    // Trigger Telegram bot
-    rt.block_on(async {
-        let bot = TelegramBot::new().map_err(|e| AppError::Telegram(format!("Failed to initialise telegram bot: {}", e))).unwrap();
-        let text = "This is a new chat test";
-        bot.send_message_with_buttons(7257416467, text, None).await?;
-        Ok(())
-    })
+async fn decode_launch_data(event_data: Vec<Felt>) -> anyhow::Result<LaunchEvent, anyhow::Error> {
+    let launch_event: LaunchEvent =
+        LaunchEvent::from_starknet_event_data(event_data).context("Parsing Launch Event")?;
+    Ok(launch_event)
 }
