@@ -68,7 +68,7 @@ async fn is_valid_account(account: &str) -> Result<bool, anyhow::Error> {
 async fn fetch_account_holdings(account: &str) -> Result<Vec<FilteredTokenData>, anyhow::Error> {
     let is_valid = is_valid_account(account).await?;
     if !is_valid {
-        panic!("{} is not a valid account", account);
+        println!("{} is not a valid account", account);
     }
 
     let explorer_env = std::env::var("EXPLORER_API").expect("EXPLORER_API must be set.");
