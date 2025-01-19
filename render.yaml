@@ -1,0 +1,43 @@
+# Render.yaml for deploying a Rust application
+services:
+  # Main web service
+  - type: web
+    name: starksnipe
+    env: rust
+    buildCommand: cargo build --release
+    startCommand: ./target/release/meme-sniper
+    repo: https://github.com/0xShisuiii/starkSnipe-deploy.git
+    branch: master
+    plan: starter
+    numInstances: 1
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: TELEGRAM_TOKEN
+        value: 7257416467:AAHZDqlFCXafLjCTjTBqU_s9-YvqsjqWV0o
+      - key: APIBARA_KEY
+        value: dna_QFJB9iXopwmizny7ugc7
+      - key: CONTRACT_ADDRESS
+        value: 0x01a46467a9246f45c8c340f1f155266a26a71c07bd55d36e8d1c7d0d438a2dbc
+      - key: STARTING_BLOCK
+        value: "1025762"
+      - key: EXPLORER_API
+        value: https://voyager.online/api/contract
+      - key: EXPLORER
+        value: https://voyager.online/contract/
+      - key: EKUBO_CORE_ADDRESS
+        value: 0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b
+      - key: DEX_URL
+        value: https://starksnipe.vercel.app/
+      - key: EXPLORER_URL
+        value: https://app.ekubo.org/positions
+  # Background worker
+# Build configuration
+# Global environment variables
+envVarGroups:
+  - name: rust-settings
+    envVars:
+      - key: RUST_BACKTRACE
+        value: "1"
+      - key: RUST_ENV
+        value: production
