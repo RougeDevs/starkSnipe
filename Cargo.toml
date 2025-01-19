@@ -15,8 +15,8 @@ anyhow = "1.0.95"
 apibara-core = { git = "https://github.com/apibara/dna", rev = "9caa385" }
 apibara-sdk = { git = "https://github.com/apibara/dna", rev = "9caa385" }
 lazy_static = "1.5.0"
-starknet-core = { git = "ssh://git@github.com/xJonathanLEI/starknet-rs.git", version = "0.12.1" }
-starknet-contract = { git = "ssh://git@github.com/xJonathanLEI/starknet-rs.git", version = "0.12.0" }
+starknet-core = { git = "https://github.com/xJonathanLEI/starknet-rs.git", version = "0.12.1" }
+starknet-contract = { git = "https://github.com/xJonathanLEI/starknet-rs.git", version = "0.12.0" }
 starknet = "0.13.0"
 num-bigint = "0.4.6"
 hex = "0.4.3"
