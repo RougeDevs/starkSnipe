@@ -8,7 +8,7 @@ services:
     startCommand: ./target/release/meme-sniper
     repo: https://github.com/0xShisuiii/starkSnipe-deploy.git
     branch: master
-    plan: starter
+    plan: free
     numInstances: 1
     envVars:
       - key: RUST_LOG
