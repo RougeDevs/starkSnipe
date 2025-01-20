@@ -36,10 +36,10 @@ async fn fetch_holders_data(token_address: &str) -> Result<TokenCategoryResponse
         format!("🌑 *>100 hodlers* — *Moon phase incoming!*")
     } else {
         match filtered_items.len() {
-            0..=9 => format!("🌱 *<10* — *Early bird special!*"),
-            10..=19 => format!("🚀 *>10* — *FOMO vibes!*"),
-            20..=49 => format!("🔥 *>20* — *It’s heating up! 🔥*"),
-            _ => format!("💥 *>50* — *Time to jump in!*"),
+            0..=9 => format!(" *<10* — *Early bird special! 🌱*"),
+            10..=19 => format!(" *>10* — *FOMO vibes! 🚀 *"),
+            20..=49 => format!(" *>20* — *It’s heating up! 🔥*"),
+            _ => format!(" *>50* — *Time to jump in! 💥*"),
         }
     };
 

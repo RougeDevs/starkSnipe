@@ -72,7 +72,7 @@ impl TelegramConfig {
         Self {
             token: std::env::var("TELEGRAM_TOKEN").expect("TELEGRAM_TOKEN not found"),
             dex_url: std::env::var("DEX_URL").unwrap_or_else(|_| "https://app.avnu.fi".to_string()),
-            explorer_url: std::env::var("EXPLORER_URL")
+            explorer_url: std::env::var("EXPLORER")
                 .unwrap_or_else(|_| "https://starkscan.co".to_string()),
         }
     }
@@ -147,25 +147,36 @@ impl TelegramBot {
 
         Ok(())
     }
+    
+    fn calculate_team_allocation(&self, total_supply: String, total_team_allocation: String)-> std::string::String {
+        let parsed_total_supply = self.format_large_number(&total_supply).unwrap().parse::<f64>().unwrap();
+        let parsed_team_allocation = self.format_large_number(&total_team_allocation).unwrap().parse::<f64>().unwrap();
+
+        let percentage_team_allocation = (parsed_team_allocation * 100.0) / parsed_total_supply;
+
+        format!("{:.2}", percentage_team_allocation)
+    }
 
     pub async fn broadcast_event(&self, event_data: MemecoinInfo) -> Result<(), Error> {
         let active_users = self.active_users.read().await;
 
         let message = format!(
-            "🚨 *FRESH LAUNCH ALERT*\n\n\
+            "🚨 ====== *FRESH LAUNCH ALERT* ====== 🚨\n\n\
                     *{}* ({}) has landed on Starknet!\n\n\
-                    Starting MCAP: ${}\n\
-                    Supply: {}\n\
-                    Liquidity: EKUBO Pool #{}\n\
-                    Team: {}%\n\
-                    ⚡️ GET IN NOW\n\n\
+                    *Address:* {}\n\
+                    *Starting MCAP:* ${}\n\
+                    *Supply:* {}\n\
+                    *Liquidity:* ${}\n\
+                    *Team:* {}%\n\
+                    ⚡️ *GET IN NOW*\n\n\
                     #Starknet #Memecoin #{}",
-            event_data.name,
-            event_data.symbol,
+                    event_data.name,
+                    event_data.symbol,
+                    event_data.address,
             self.format_price(event_data.market_cap),
             self.format_number(&self.format_large_number(&event_data.total_supply).unwrap()).unwrap(),
-            event_data.usd_dex_liquidity,
-            self.format_percentage(event_data.team_allocation),
+            format!("{:.2}", event_data.usd_dex_liquidity.parse::<f64>().unwrap()),
+            self.format_percentage(self.calculate_team_allocation(event_data.total_supply, event_data.team_allocation)),
             event_data.symbol
         );
 
@@ -367,14 +378,14 @@ impl TelegramBot {
                         match get_account_holding_info(wallet_addr, token_addr).await {
                             Ok(info) => {
                                 let message = format!(
-                                    "📊 TOKEN SPOT \n——————————————\n\n\
-                                    Wallet: `{}`\n\
-                                    Token: ${}\n\n\
-                                    POSITION\n\
-                                    Balance: {}\n\
-                                    Worth: ${}\n\n\
-                                    ACTIONS\n\
-                                    ⚡️ Trade Now: {}",
+                                    "📊 ====== *TOKEN SPOT* ====== 📊\n\n\
+                                    *Wallet:* {}\n\
+                                    *Token:* ${}\n\n\
+                                    *POSITION*\n\
+                                    *Balance:* {}\n\
+                                    *Worth:* ${}\n\n\
+                                    *ACTIONS*\n\
+                                    ⚡️ *Trade Now:* {}",
                                     self.format_short_address(wallet_addr),
                                     info.coin_info.symbol,
                                     self.format_large_number(&info.account_balance).unwrap(),
@@ -383,19 +394,7 @@ impl TelegramBot {
                                     // token_addr
                                 );
 
-                                let keyboard = json!({
-                                    "inline_keyboard": [
-                                        [
-                                            {
-                                                "text": "💱 Trade Now",
-                                                "url": format!("{}", 
-                                                    self.config.dex_url)
-                                            }
-                                        ]
-                                    ]
-                                });
-
-                                self.send_message_with_markup(chat_id, &message, keyboard, None).await?;
+                                self.send_message(chat_id, &message, None).await?;
                             }
                             Err(e) => {
                                 let error_message = format!(
@@ -429,21 +428,16 @@ impl TelegramBot {
                 if active_users.insert(chat_id, true).is_none() {
                     self.send_message(
                         chat_id,
-                        "⚡️ WELCOME TO SNIQ BOT ⚡️\n\
-                                ——————————————————\n\n\
+                        "⚡️ ====== *WELCOME TO SNIQ BOT* ====== ⚡️\n\n\
                                 Catch the Meme. Beat the Market. 🎯🔥\n\n\
-                                🚀 FEATURES:\n\
+                                🚀 *FEATURES:*\n\
                                 ✨ Instant Token Sniping – Know what’s hot in seconds.\n\
                                 🔍 Wallet Scanning – Fast, flawless, precise.\n\
                                 💸 One-Tap Trading – Access the market like a pro.\n\n\
-                                ⚡️ GET STARTED:\n\
-                                💥 /sniQ <address> – Scan a token instantly!\n\
-                                👀 /peek <wallet> – See your memecoin holdings.\n\
-                                🎯 /spot <wallet> <token> – Track your position on any token.\n\n\
-                                🔧 Need help?\n\
-                                /guide 📘 – Explore how to use the bot.\n\n\
-                                🚀 Ready to trade?\n\
-                                /trade 💥 – Let’s make some moves!\n\n\
+                                ⚡️ *GET STARTED:*\n\
+                                💥 */sniQ <address>* – Scan a token instantly!\n\
+                                👀 */peek <wallet>* – See your memecoin holdings.\n\
+                                🎯 */spot <wallet> <token>* – Track your position on any token.\n\n\
                                 💎 sniq.fun\n\
                                 Fast. Sharp. Ahead. — Sniping Memecoins Like a Pro. ⚡️"
                                 ,
@@ -490,7 +484,9 @@ impl TelegramBot {
                     /stop - Stop receiving token alerts\n\
                     /status - Check your alert status\n\
                     /help - Show this help message\n\
-                    /spot <wallet> <token> - Get token position for a wallet\n\n\
+                    /spot <wallet> <token> - Get token position for a wallet\n\
+                    /peek <wallet> - Check token position\n\
+                    /sniQ <token> - Get info on a particular token\n\n\
                     ℹ️ You'll receive alerts for new tokens as they're detected.",
                     None,
                 )
@@ -502,13 +498,12 @@ impl TelegramBot {
                         match get_account_holdings(wallet_address).await {
                             Ok(holdings) => {
                                 let message = format!("
-                                        💼 BAG CHECK\n\
-                                        ——————————————\n\n\
-                                        👛 Wallet: `{}`\n\n\
-                                        💼 PORTFOLIO\n\
-                                        🎯 Total Memecoins: `{}`\n\n\
-                                        💡 TIP: Check token position\n\
-                                        Use: /spot <wallet> <token>
+                                        💼 ====== *BAG CHECK* ====== 💼\n\n\
+                                        👛 *Wallet:* \n{}\n\n\
+                                        💼 *PORTFOLIO*\n\
+                                        🎯 *Total Memecoins:* {}\n\n\
+                                        💡 *TIP:* Check token position\n\
+                                        *Use: /spot <wallet> <token>*
                                 ",
                                     holdings.account_address,
                                     holdings.total_tokens
@@ -533,22 +528,23 @@ impl TelegramBot {
                         match aggregate_info(token_address).await {
                             Ok(response) => {
                                 let message = format!("
-                                          ⚡ SNIQ RADAR ⚡\n\
-                                        ——————————————----\n\
-                                        Token: ${}\n\
-                                        Name: {}\n\
-                                        Contract: {}\n\n\
-                                        📊 METRICS\n\
-                                        💰 Price: ${}\n\
-                                        📈 MCap: ${}\n\
-                                        💫 Supply: ${}\n\
-                                        💧 LP: ${}\n\n\
-                                        🛡 SECURITY CHECK\n\
-                                        🔒 LP Status: Locked Forever\n\
-                                        ✅ Contract: Verified\n\n\
-                                        🔗 QUICK LINKS\n\
-                                        🎯 Trade: {}\n\
-                                        🔍 Explorer: {}\n\
+                                             ⚡ ====== *SNIQ RADAR* ======⚡\n\
+                                        \n\
+                                        *Token:* ${}\n\
+                                        *Name:* {}\n\
+                                        *Contract:* {}\n\n\
+                                        📊 *METRICS*\n\
+                                        💰 *Price:* ${}\n\
+                                        📈 *MCap:* ${}\n\
+                                        💫 *Supply:* ${}\n\
+                                        👥 *Holders:* {}\n\
+                                        💧 *LP:* ${}\n\n\
+                                        🛡 *SECURITY CHECK*\n\
+                                        🔒 *LP Status:* Locked Forever\n\
+                                        ✅ *Contract:* Verified\n\n\
+                                        🔗 *QUICK LINKS*\n\
+                                        🎯 *Trade:* {}\n\
+                                        🔍 *Explorer:* {}\n\
                                         ",
                                         response.0.symbol,
                                         response.0.name,
@@ -556,9 +552,10 @@ impl TelegramBot {
                                         response.0.price,
                                         self.format_number(&response.0.market_cap).unwrap(),
                                         self.format_number(&self.format_large_number(&response.0.total_supply).unwrap()).unwrap(),
+                                        response.1.category,
                                         self.format_number(&response.0.usd_dex_liquidity).unwrap(),
                                         self.config.dex_url,
-                                        self.config.explorer_url
+                                        format!("{}/{}",self.config.explorer_url, response.0.address )
                                     );
                                 self.send_message(chat_id,  &message, None).await;
                             },
