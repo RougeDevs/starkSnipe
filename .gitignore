@@ -2,3 +2,5 @@
 .env
 /kanshi
 *.lock
+.shuttle*
+Secrets*.toml

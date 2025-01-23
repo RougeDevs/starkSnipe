@@ -28,4 +28,8 @@ backtrace = "0.3.74"
 num-integer = "0.1.46"
 kanshi = { git = "https://github.com/RougeDevs/kanshi.git", branch = "dev", version = "0.1.0" }
 rust_decimal = "1.36.0"
+shuttle-runtime = "0.51.0"
+shuttle-axum = "0.51.0"
+axum = "0.8.1"
+regex = "1.11.1"
 

@@ -2,12 +2,15 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use apibara_core::starknet::v1alpha2::{Event, FieldElement};
+use axum::{routing::get, Router};
 use dotenv::dotenv;
 use kanshi::{
     config::Config,
     dna::IndexerService,
     utils::conversions::{apibara_field_as_felt, felt_as_apibara_field},
 };
+use shuttle_axum::ShuttleAxum;
+use shuttle_runtime::SecretStore;
 use starknet::core::utils::get_selector_from_name;
 use starknet_core::types::Felt;
 use telegram::{TelegramBot, TelegramConfig};
@@ -33,47 +36,51 @@ enum EventType {
     Launch(LaunchEvent),
 }
 
-#[tokio::main]
-async fn main() {
+#[shuttle_runtime::main]
+pub async fn axum(
+    #[shuttle_runtime::Secrets] secrets: SecretStore,
+) -> ShuttleAxum {
     dotenv().ok();
-
-    let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
-
-    // Load configurations
-    let config = match Config::new() {
-        Ok(config) => {
-            println!("Configurations loaded ✓");
-            config
-        }
-        Err(e) => {
-            eprintln!("Failed to load configuration ❗️ {}", e);
-            return;
+    println!("Welcome to sniQ");
+   // Helper function to set environment variables safely
+    let set_env_var = |key: &str| {
+        if let Some(value) = secrets.get(key) {
+            std::env::set_var(key, value);
+        } else {
+            eprintln!("Warning: {} not found in secrets", key);
         }
     };
+
+    // Set all environment variables
+    set_env_var("TELEGRAM_TOKEN");
+    set_env_var("APIBARA_KEY");
+    set_env_var("CONTRACT_ADDRESS");
+    set_env_var("STARTING_BLOCK");
+    set_env_var("EXPLORER_API");
+    set_env_var("EXPLORER");
+    set_env_var("EKUBO_CORE_ADDRESS");
+    set_env_var("DEX_URL");
+    set_env_var("EXPLORER_URL");
+    set_env_var("WRITE_PATH");
+    // Initialize a channel for event processing
+    let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
+
+    // Load configurations from environment or config files
+    let config = Config::new().context("Failed to load configuration")?;
 
     // Create the IndexerService instance
     let service = IndexerService::new(config);
 
     // Initialize Telegram bot
     let tg_config = TelegramConfig::new();
-    let tg_bot = match TelegramBot::new(tg_config) {
-        Ok(bot) => {
-            println!("Telegram bot initialized ✓");
-            Arc::new(bot)
-        }
-        Err(e) => {
-            eprintln!("Failed to initialize Telegram bot ❗️ {}", e);
-            return;
-        }
-    };
+    let tg_bot = TelegramBot::new(tg_config).context("Failed to initialize Telegram bot")?;
+    let tg_bot = Arc::new(tg_bot);
 
     // Initialize the bot
-    if let Err(e) = tg_bot.initialize().await {
-        eprintln!("Failed to initialize Telegram bot commands ❗️ {}", e);
-        return;
-    }
+    tg_bot.initialize().await.context("Failed to initialize Telegram bot commands")?;
 
-    // Create Arc clones for different tasks
+
+    // Clone Telegram bot for separate tasks
     let tg_bot_updates = Arc::clone(&tg_bot);
     let tg_bot_events = Arc::clone(&tg_bot);
 
@@ -105,6 +112,11 @@ async fn main() {
         _ = indexer_handle => println!("Indexer task completed"),
         _ = consumer_handle => println!("Consumer task completed"),
     }
+
+    // Return a basic Axum server with no routes
+    let router = Router::new().route("/health", get(|| async { "OK" }));
+
+    Ok(router.into())
 }
 
 async fn process_event(event: Event, tg_bot: &Arc<TelegramBot>) -> Result<()> {

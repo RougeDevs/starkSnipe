@@ -96,14 +96,7 @@ impl fmt::Display for Liquidity {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct PoolKey {
-    pub token0: String,
-    pub token1: String,
-    pub fee: String,
-    pub tick_spacing: String,
-    pub extension: String,
-}
+// Removed duplicate PoolKey struct definition
 
 #[derive(Debug)]
 pub struct EkuboPoolParameters {
@@ -131,8 +124,8 @@ pub struct Bound {
     pub sign: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct PoolKeyResponse {
+#[derive(Debug, Clone, Deserialize)]
+pub struct PoolKey {
     pub token0: String,
     pub token1: String,
     pub fee: String,
@@ -140,23 +133,26 @@ pub struct PoolKeyResponse {
     pub extension: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct RouteResponse {
-    pub pool_key: PoolKeyResponse,
+#[derive(Debug, Deserialize)]
+pub struct Route {
+    pub pool_key: PoolKey,
     pub sqrt_ratio_limit: String,
     pub skip_ahead: u64,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct SplitResponse {
-    pub amount: String,
-    #[serde(rename = "specifiedAmount")]
-    pub specified_amount: String,
-    pub route: Vec<RouteResponse>,
+#[derive(Debug, Deserialize)]
+pub struct Split {
+    #[serde(rename = "amount_specified")]
+    pub amount_specified: String,
+    #[serde(rename = "amount_calculated")]
+    pub amount_calculated: String,
+    pub route: Vec<Route>,
 }
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, Deserialize)]
 pub struct QuoteResponseApi {
-    pub total: String,
-    pub splits: Vec<SplitResponse>,
+    #[serde(rename = "total_calculated")]
+    pub total_calculated: String,
+    pub price_impact: Option<f64>,
+    pub splits: Vec<Split>,
 }

@@ -111,9 +111,10 @@ fn parse_token_data(api_response: &HoldingApiResponse) -> Vec<FilteredTokenData>
 pub async fn aggregate_info(
     token_address: &str,
 ) -> Result<(MemecoinInfo, TokenCategoryResponse), anyhow::Error> {
+    println!("token address_ai -> {}", token_address);
     let ekubo_core = std::env::var("EKUBO_CORE_ADDRESS").expect("EKUBO_CORE_ADDRESS must be set.");
     let aggregated_data: Memecoin = get_aggregate_call_data(&token_address).await?;
-    let data = calculate_market_cap(&aggregated_data.total_supply, &aggregated_data.symbol).await;
+    let data = calculate_market_cap(&aggregated_data.total_supply, &token_address).await;
     let mut price = String::new();
     let mut market_cap = String::new();
     if data.is_ok() {
@@ -122,7 +123,7 @@ pub async fn aggregate_info(
     let holders_data: TokenCategoryResponse = fetch_holders_data(&token_address).await?;
     let ekubo_core_balance = get_balance(&token_address, &ekubo_core).await?;
     let ekubo_core_balance_f64: f64 = ekubo_core_balance.parse()?;
-    let price_f64: f64 = price.parse()?;
+    let price_f64: f64 = price.parse().unwrap_or(0.0);
     let liquidity = (ekubo_core_balance_f64 * price_f64).to_string();
     Ok((
         MemecoinInfo {

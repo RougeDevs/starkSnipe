@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  rust-indexer:
+    image: sniq:latest  # Replace with your actual image name
+    container_name: rust_indexer
+    restart: unless-stopped
+    volumes:
+      - ./indexer_state.json:/usr/src/app/indexer_state.json  # Persist state
+    env_file:
+      - .env  # Load environment variables from .env file in the root directory
+    environment:
+      - RUST_BACKTRACE=1
+      - PROTOC=/usr/bin/protoc  # Ensure protoc is set if needed
+    networks:
+      - indexer_network
+
+networks:
+  indexer_network:
+    driver: bridge

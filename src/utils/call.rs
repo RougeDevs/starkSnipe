@@ -8,6 +8,7 @@ use starknet::providers::jsonrpc::HttpTransport;
 use starknet::providers::{JsonRpcClient, Provider, ProviderError};
 use starknet_core::types::Felt;
 use url::Url;
+use regex::Regex;
 
 use crate::constant::constants::{
     selector_to_str, Selector, EXCHANGE_ADDRESS, MEMECOIN_FACTORY_ADDRESS,
@@ -70,13 +71,13 @@ fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
 
     let factory_address = MEMECOIN_FACTORY_ADDRESS;
     let ekubo_id: String = 1.to_string();
-
+    println!("line 73");
     let factory_calls = [
         ("is_memecoin", Selector::IsMemecoin),
         ("exchange", Selector::ExchangeAddress),
         ("locked_liquidity", Selector::LockedLiquidity),
     ];
-
+    println!("line 79");
     for (name, selector) in factory_calls {
         calls.push(Felt::from_hex_unchecked(factory_address));
         calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
@@ -107,6 +108,7 @@ fn generate_calls(address: &str) -> Vec<starknet_core::types::Felt> {
         calls.push(get_selector_from_name(&selector_to_str(selector)).unwrap());
         calls.push(Felt::ZERO);
     }
+    println!("returning calls");
     calls
 }
 

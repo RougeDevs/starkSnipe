@@ -1,63 +1,19 @@
-use kanshi::dna::EventData;
+use messages::{create_launch_keyboard, generate_broadcast_event, handle_peek_command, handle_sniq_command, handle_spot_command};
 use reqwest::{Client, Error};
-use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::json;
+use types::common::Update;
+use utils::{calculate_team_allocation, format_large_number, format_number, format_percentage, format_price, format_short_address, is_valid_starknet_address};
 use std::collections::HashMap;
-use std::fmt::format;
-use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use rust_decimal::prelude::*;
 
-use crate::utils::event_parser::CreationEvent;
 use crate::utils::info_aggregator::{aggregate_info, get_account_holding_info, get_account_holdings};
 use crate::utils::types::common::MemecoinInfo;
-use crate::utils::types::ekubo::Memecoin;
-use crate::EventType;
 
-#[derive(Debug, Deserialize)]
-struct Update {
-    update_id: i64,
-    #[serde(default)]
-    message: Option<Message>,
-    #[serde(default)]
-    callback_query: Option<CallbackQuery>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Message {
-    message_id: i64,
-    #[serde(default)]
-    from: Option<User>,
-    chat: Chat,
-    #[serde(default)]
-    text: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CallbackQuery {
-    id: String,
-    from: User,
-    data: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct User {
-    id: i64,
-    first_name: String,
-    #[serde(default)]
-    last_name: Option<String>,
-    #[serde(default)]
-    username: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Chat {
-    id: i64,
-    #[serde(rename = "type")]
-    chat_type: String,
-}
+pub mod types;
+pub mod utils;
+pub mod messages;
 
 // Configuration struct for TelegramBot
 #[derive(Clone)]
@@ -105,38 +61,36 @@ impl TelegramBot {
     }
 
     async fn set_commands(&self) -> Result<(), Error> {
-        let commands = json!({
-            "commands": [
-                {
-                    "command": "start",
-                    "description": "Start receiving token alerts"
-                },
-                {
-                    "command": "stop",
-                    "description": "Stop receiving token alerts"
-                },
-                {
-                    "command": "status",
-                    "description": "Check your current alert status"
-                },
-                {
-                    "command": "help",
-                    "description": "Show available commands"
-                },
-                {
-                    "command": "sniQ <address>",
-                    "description": "Get token info"
-                },
-                {
-                    "command": "peek <wallet>",
-                    "description": "Get wallet info"
-                },
-                {
-                    "command": "spot <wallet> <token_address>",
-                    "description": "Get wallet holdings for a particular token"
-                }
-            ]
-        });
+        let commands = json!([
+            {
+                "command": "start",
+                "description": "Start receiving token alerts"
+            },
+            {
+                "command": "stop",
+                "description": "Stop receiving token alerts"
+            },
+            {
+                "command": "status",
+                "description": "Check your current alert status"
+            },
+            {
+                "command": "help",
+                "description": "Show available commands"
+            },
+            {
+                "command": "sniq",
+                "description": "Get token info by address"
+            },
+            {
+                "command": "peek",
+                "description": "Get wallet info by address"
+            },
+            {
+                "command": "spot",
+                "description": "Get wallet token holdings"
+            }
+        ]);
 
         let url = format!("{}/setMyCommands", self.base_url);
         let response = self.client.post(&url).json(&commands).send().await?;
@@ -147,41 +101,14 @@ impl TelegramBot {
 
         Ok(())
     }
-    
-    fn calculate_team_allocation(&self, total_supply: String, total_team_allocation: String)-> std::string::String {
-        let parsed_total_supply = self.format_large_number(&total_supply).unwrap().parse::<f64>().unwrap();
-        let parsed_team_allocation = self.format_large_number(&total_team_allocation).unwrap().parse::<f64>().unwrap();
-
-        let percentage_team_allocation = (parsed_team_allocation * 100.0) / parsed_total_supply;
-
-        format!("{:.2}", percentage_team_allocation)
-    }
 
     pub async fn broadcast_event(&self, event_data: MemecoinInfo) -> Result<(), Error> {
         let active_users = self.active_users.read().await;
 
-        let message = format!(
-            "🚨 ====== *FRESH LAUNCH ALERT* ====== 🚨\n\n\
-                    *{}* ({}) has landed on Starknet!\n\n\
-                    *Address:* {}\n\
-                    *Starting MCAP:* ${}\n\
-                    *Supply:* {}\n\
-                    *Liquidity:* ${}\n\
-                    *Team:* {}%\n\
-                    ⚡️ *GET IN NOW*\n\n\
-                    #Starknet #Memecoin #{}",
-                    event_data.name,
-                    event_data.symbol,
-                    event_data.address,
-            self.format_price(event_data.market_cap),
-            self.format_number(&self.format_large_number(&event_data.total_supply).unwrap()).unwrap(),
-            format!("{:.2}", event_data.usd_dex_liquidity.parse::<f64>().unwrap()),
-            self.format_percentage(self.calculate_team_allocation(event_data.total_supply, event_data.team_allocation)),
-            event_data.symbol
-        );
+        let message = generate_broadcast_event(event_data.clone());
 
-        let keyboard = self.create_launch_keyboard(&event_data.address, &event_data.symbol);
-
+        let keyboard = create_launch_keyboard(&self.config.dex_url,&event_data.address, &event_data.symbol);
+        // println!("active_users -> {}", active_users.clone().len());
         for (&chat_id, &active) in active_users.iter() {
             if active {
                 if let Err(e) = self
@@ -192,160 +119,11 @@ impl TelegramBot {
                 }
             }
         }
-
         Ok(())
-    }
-
-    fn create_launch_keyboard(
-        &self,
-        contract_address: &str,
-        token_symbol: &str,
-    ) -> serde_json::Value {
-        json!({
-            "inline_keyboard": [
-                [
-                    {
-                        "text": "🚀 Buy $10",
-                        "url": format!("{}?token={}&amount=10&symbol={}",
-                            self.config.dex_url, contract_address, token_symbol)
-                    },
-                    {
-                        "text": "🚀 Buy $50",
-                        "url": format!("{}?token={}&amount=50&symbol={}",
-                            self.config.dex_url, contract_address, token_symbol)
-                    },
-                    {
-                        "text": "🚀 Buy $100",
-                        "url": format!("{}?token={}&amount=100&symbol={}",
-                            self.config.dex_url, contract_address, token_symbol)
-                    }
-                ],
-                [
-                    {
-                        "text": "💰 Custom Amount",
-                        "url": format!("{}?token={}",
-                            self.config.dex_url, contract_address)
-                    }
-                ]
-            ]
-        })
-    }
-
-    fn format_number(&self, num_str: &str) -> Result<String, &'static str> {
-        // Parse the string to f64
-        let num = match num_str.parse::<f64>() {
-            Ok(n) => n,
-            Err(_) => return Err("Invalid number format"),
-        };
-    
-        // Define the thresholds and their corresponding suffixes
-        let billion = 1_000_000_000.0;
-        let million = 1_000_000.0;
-        let thousand = 1_000.0;
-    
-        let (value, suffix) = if num >= billion {
-            (num / billion, "B")
-        } else if num >= million {
-            (num / million, "M")
-        } else if num >= thousand {
-            (num / thousand, "K")
-        } else {
-            (num, "")
-        };
-    
-        // Format with up to 2 decimal places, removing trailing zeros
-        let formatted = format!("{:.2}", value)
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string();
-    
-        Ok(format!("{}{}", formatted, suffix))
-    }
-
-
-    fn format_large_number(&self, input: &str) -> Result<String, &'static str> {
-        // Validate input is numeric
-    if !input.chars().all(|c| c.is_digit(10)) {
-        return Err("Invalid input: must contain only digits");
-    }
-
-    let input_len = input.len();
-    
-    // If input is less than 18 digits, we need to add decimal places
-    if input_len < 18 {
-        let zeros_needed = 18 - input_len;
-        let mut result = "0.".to_string();
-        // Add necessary leading zeros
-        for _ in 0..zeros_needed {
-            result.push('0');
-        }
-        result.push_str(input.trim_start_matches('0'));
-        if result == "0." {
-            return Ok("0".to_string());
-        }
-        return Ok(result.trim_end_matches('0').trim_end_matches('.').to_string());
-    }
-    
-    // If input is exactly 18 digits, result is 1
-    if input_len == 18 {
-        return Ok("1".to_string());
-    }
-    
-    // If input is more than 18 digits, we need to place a decimal point
-    let decimal_position = input_len - 18;
-    let mut result = input[0..decimal_position].to_string();
-    let fraction = &input[decimal_position..];
-    
-    if fraction != "000000000000000000" {
-        result.push('.');
-        result.push_str(fraction.trim_end_matches('0'));
-    }
-    
-    // Remove leading zeros and handle special case
-    result = result.trim_start_matches('0').to_string();
-    if result.is_empty() || result.starts_with('.') {
-        result = format!("0{}", result);
-    }
-    
-    // Remove trailing decimal if it exists
-    if result.ends_with('.') {
-        result.pop();
-    }
-    
-    Ok(result)
-    }
-
-    // Helper functions for formatting
-    fn format_price(&self, price: String) -> String {
-        format!("{:.2}", price)
-    }
-
-    fn format_percentage(&self, value_str: String) -> String {
-        // Try to parse the string as f64
-        match value_str.parse::<f64>() {
-            Ok(value) => {
-                format!("{:.1}", value)
-            }
-            Err(_) => {
-                // If parsing fails, return the original string
-                // You might want to log this error in a production environment
-                eprintln!("Failed to parse percentage string: {}", value_str);
-                value_str
-            }
-        }
-    }
-
-    fn format_short_address(&self, address: &str) -> String {
-        if address.len() > 8 {
-            format!("{}...{}", &address[..6], &address[address.len() - 4..])
-        } else {
-            address.to_string()
-        }
     }
 
     pub async fn handle_updates(&self) -> Result<(), Error> {
         let mut last_update_id = 0;
-
         loop {
             match self.get_updates(last_update_id + 1).await {
                 Ok(updates) => {
@@ -370,49 +148,14 @@ impl TelegramBot {
 
     async fn handle_command(&self, command: &str, chat_id: i64) -> Result<(), Error> {
         let parts: Vec<&str> = command.split_whitespace().collect();
-        
+        println!("handle command invoked");
         match parts.get(0).map(|s| *s) {
             Some("/spot") => {
                 match (parts.get(1), parts.get(2)) {
-                    (Some(wallet_addr), Some(token_addr)) => {
-                        match get_account_holding_info(wallet_addr, token_addr).await {
-                            Ok(info) => {
-                                let message = format!(
-                                    "📊 ====== *TOKEN SPOT* ====== 📊\n\n\
-                                    *Wallet:* {}\n\
-                                    *Token:* ${}\n\n\
-                                    *POSITION*\n\
-                                    *Balance:* {}\n\
-                                    *Worth:* ${}\n\n\
-                                    *ACTIONS*\n\
-                                    ⚡️ *Trade Now:* {}",
-                                    self.format_short_address(wallet_addr),
-                                    info.coin_info.symbol,
-                                    self.format_large_number(&info.account_balance).unwrap(),
-                                    info.usd_value,
-                                    self.config.dex_url,
-                                    // token_addr
-                                );
-
-                                self.send_message(chat_id, &message, None).await?;
-                            }
-                            Err(e) => {
-                                let error_message = format!(
-                                    "❌ Error fetching token info: {}",
-                                    if e.to_string().contains("parse") {
-                                        "Invalid token data format"
-                                    } else if e.to_string().contains("aggregate_info") {
-                                        "Failed to fetch token information"
-                                    } else if e.to_string().contains("get_balance") {
-                                        "Failed to fetch account balance"
-                                    } else {
-                                        "Unexpected error occurred"
-                                    }
-                                );
-                                self.send_message(chat_id, &error_message, None).await?;
-                            }
+                    (Some(wallet_address), Some(token_address)) => {
+                            let message = handle_spot_command(wallet_address.to_string(), token_address.to_string(), &self.config.dex_url).await;
+                            self.send_message(chat_id, &message, None).await?;
                         }
-                    }
                     _ => {
                         self.send_message(
                             chat_id,
@@ -425,6 +168,7 @@ impl TelegramBot {
             }
             Some("/start") => {
                 let mut active_users = self.active_users.write().await;
+                println!("received start info -> {:?}", active_users.clone());
                 if active_users.insert(chat_id, true).is_none() {
                     self.send_message(
                         chat_id,
@@ -495,26 +239,8 @@ impl TelegramBot {
             Some("/peek") => {
                 match (parts.get(1)) {
                     Some(wallet_address) => {
-                        match get_account_holdings(wallet_address).await {
-                            Ok(holdings) => {
-                                let message = format!("
-                                        💼 ====== *BAG CHECK* ====== 💼\n\n\
-                                        👛 *Wallet:* \n{}\n\n\
-                                        💼 *PORTFOLIO*\n\
-                                        🎯 *Total Memecoins:* {}\n\n\
-                                        💡 *TIP:* Check token position\n\
-                                        *Use: /spot <wallet> <token>*
-                                ",
-                                    holdings.account_address,
-                                    holdings.total_tokens
-                                );
-                                self.send_message(chat_id, &message, None).await?;
-                            }
-                            Err(e) => {
-                                let error_message = format!("Error peeking into wallet ⁉️");
-                                self.send_message(chat_id, &error_message, None).await?;
-                            }
-                        }
+                        let message = handle_peek_command(wallet_address.to_string()).await;
+                        self.send_message(chat_id, &message, None).await;
                     },
                     None => {
                         let error_message = format!("Invalid parameters ❗️");
@@ -525,45 +251,8 @@ impl TelegramBot {
             Some("/sniQ") => {
                 match (parts.get(1)) {
                     Some(token_address) => {
-                        match aggregate_info(token_address).await {
-                            Ok(response) => {
-                                let message = format!("
-                                             ⚡ ====== *SNIQ RADAR* ======⚡\n\
-                                        \n\
-                                        *Token:* ${}\n\
-                                        *Name:* {}\n\
-                                        *Contract:* {}\n\n\
-                                        📊 *METRICS*\n\
-                                        💰 *Price:* ${}\n\
-                                        📈 *MCap:* ${}\n\
-                                        💫 *Supply:* ${}\n\
-                                        👥 *Holders:* {}\n\
-                                        💧 *LP:* ${}\n\n\
-                                        🛡 *SECURITY CHECK*\n\
-                                        🔒 *LP Status:* Locked Forever\n\
-                                        ✅ *Contract:* Verified\n\n\
-                                        🔗 *QUICK LINKS*\n\
-                                        🎯 *Trade:* {}\n\
-                                        🔍 *Explorer:* {}\n\
-                                        ",
-                                        response.0.symbol,
-                                        response.0.name,
-                                        response.0.address,
-                                        response.0.price,
-                                        self.format_number(&response.0.market_cap).unwrap(),
-                                        self.format_number(&self.format_large_number(&response.0.total_supply).unwrap()).unwrap(),
-                                        response.1.category,
-                                        self.format_number(&response.0.usd_dex_liquidity).unwrap(),
-                                        self.config.dex_url,
-                                        format!("{}/{}",self.config.explorer_url, response.0.address )
-                                    );
-                                self.send_message(chat_id,  &message, None).await;
-                            },
-                            Err(error) => {
-                                let error_message = format!("Error fetching token details ⁉️");
-                                self.send_message(chat_id, &error_message, None).await?;
-                            }
-                        }
+                        let message = handle_sniq_command(token_address.to_string(), &self.config.dex_url, &self.config.explorer_url).await;
+                        self.send_message(chat_id, &message, None).await?;
                     },
                     None => {
                         let error_message = format!("Invalid parameters ❗️");
@@ -655,6 +344,7 @@ impl TelegramBot {
 
         let url = format!("{}/sendMessage", self.base_url);
         let response = self.client.post(&url).json(&request).send().await?;
+        println!("tg bot response -> {:?}", response);
 
         if !response.status().is_success() {
             eprintln!(
