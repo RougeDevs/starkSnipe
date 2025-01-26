@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use super::call::{get_aggregate_call_data, get_balance, validate_memecoins};
+use super::error::TokenError;
 use super::market_cap::calculate_market_cap;
 use super::types::common::{
     FilteredTokenData, HolderApiResponse, Holders, HoldingApiResponse, MemecoinInfo,
@@ -8,8 +9,8 @@ use super::types::common::{
 };
 use super::types::ekubo::Memecoin;
 
-async fn fetch_holders_data(token_address: &str) -> Result<TokenCategoryResponse, anyhow::Error> {
-    let explorer_env = std::env::var("EXPLORER_API").expect("EXPLORER_API must be set.");
+async fn fetch_holders_data(token_address: &str) -> Result<TokenCategoryResponse, TokenError> {
+    let explorer_env = std::env::var("EXPLORER_API").map_err(|e| TokenError::EnvVarError(e))?;
 
     let url = format!(
         "{}/{}/holders?ps=100&type=erc20",
@@ -17,9 +18,11 @@ async fn fetch_holders_data(token_address: &str) -> Result<TokenCategoryResponse
     );
 
     let response = reqwest::get(&url)
-        .await?
+        .await
+        .map_err(TokenError::NetworkError)?
         .json::<HolderApiResponse>()
-        .await?;
+        .await
+        .map_err(TokenError::NetworkError)?;
 
     let filtered_items: Vec<Holders> = response
         .items
@@ -51,13 +54,15 @@ async fn fetch_holders_data(token_address: &str) -> Result<TokenCategoryResponse
     Ok(result)
 }
 
-async fn is_valid_account(account: &str) -> Result<bool, anyhow::Error> {
-    let explorer_env = std::env::var("EXPLORER_API").expect("EXPLORER_API must be set.");
+async fn is_valid_account(account: &str) -> Result<bool, TokenError> {
+    let explorer_env = std::env::var("EXPLORER_API").map_err(|e| TokenError::EnvVarError(e))?;
     let url = format!("{}/{}/", explorer_env, account);
     let response = reqwest::get(&url)
-        .await?
+        .await
+        .map_err(TokenError::NetworkError)?
         .json::<serde_json::Value>()
-        .await?;
+        .await
+        .map_err(TokenError::NetworkError)?;
 
     Ok(response
         .get("isAccount")
@@ -65,20 +70,22 @@ async fn is_valid_account(account: &str) -> Result<bool, anyhow::Error> {
         .unwrap_or(false))
 }
 
-async fn fetch_account_holdings(account: &str) -> Result<Vec<FilteredTokenData>, anyhow::Error> {
+async fn fetch_account_holdings(account: &str) -> Result<Vec<FilteredTokenData>, TokenError> {
     let is_valid = is_valid_account(account).await?;
     if !is_valid {
         println!("{} is not a valid account", account);
     }
 
-    let explorer_env = std::env::var("EXPLORER_API").expect("EXPLORER_API must be set.");
+    let explorer_env = std::env::var("EXPLORER_API").map_err(|e| TokenError::EnvVarError(e))?;
     let url = format!("{}/{}/token-balances", explorer_env, account);
 
     // Send the request and fetch the response
     let response = reqwest::get(&url)
-        .await?
+        .await
+        .map_err(TokenError::NetworkError)?
         .json::<HoldingApiResponse>()
-        .await?;
+        .await
+        .map_err(TokenError::NetworkError)?;
 
     // Filter and parse the response to get only tokens with 18 decimals
     let filtered_tokens = parse_token_data(&response);

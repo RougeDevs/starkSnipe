@@ -1,3 +1,4 @@
+use super::error::CallError;
 use super::types::ekubo::{EkuboPoolParameters, Launch, Liquidity, Memecoin, StartingPrice};
 use num_traits::cast::ToPrimitive;
 use serde::de::value::Error;
@@ -31,32 +32,18 @@ impl FromFieldBytes for u128 {
 
 const EKUBO_NFT: &str = "EKUBO_NFT";
 
-#[derive(Debug, thiserror::Error)]
-pub enum AggregateError {
-    #[error("Provider error: {0}")]
-    Provider(#[from] ProviderError),
 
-    #[error("URL parsing error: {0}")]
-    Url(#[from] url::ParseError),
-
-    #[error("Contract call failed: {0}")]
-    ContractCall(String),
-
-    #[error("Parse error: {0}")]
-    Parse(String),
-}
-
-fn get_provider() -> Result<JsonRpcClient<HttpTransport>, AggregateError> {
+fn get_provider() -> Result<JsonRpcClient<HttpTransport>, CallError> {
     println!("In get provider");
     // Create provider with error handling
     let provider = JsonRpcClient::new(HttpTransport::new(
         Url::parse("https://starknet-mainnet.public.blastapi.io/rpc/v0_7")
-            .map_err(AggregateError::Url)?,
+            .map_err(CallError::Url)?,
     ));
     Ok(provider)
 }
 
-pub async fn get_aggregate_call_data(address: &str) -> Result<Memecoin, AggregateError> {
+pub async fn get_aggregate_call_data(address: &str) -> Result<Memecoin, CallError> {
     println!("In aggregate call");
     let calls = generate_calls(address);
     let call_result = multicall_contract(calls).await.unwrap();
@@ -245,7 +232,7 @@ pub fn decode_short_string(felt: &str) -> String {
     }
 }
 
-async fn multicall_contract(calls: Vec<Felt>) -> Result<Vec<Felt>, AggregateError> {
+async fn multicall_contract(calls: Vec<Felt>) -> Result<Vec<Felt>, CallError> {
     println!("In multicall contract");
     let provider = get_provider().unwrap();
 
@@ -254,7 +241,7 @@ async fn multicall_contract(calls: Vec<Felt>) -> Result<Vec<Felt>, AggregateErro
         .call(
             FunctionCall {
                 contract_address: Felt::from_hex(MULTICALL_AGGREGATOR_ADDRESS)
-                    .map_err(|e| AggregateError::ContractCall(format!("Invalid address: {}", e)))?,
+                    .map_err(|e| CallError::ContractCall(format!("Invalid address: {}", e)))?,
                 entry_point_selector: selector!("aggregate"),
                 calldata: calls,
             },
@@ -268,7 +255,7 @@ async fn multicall_contract(calls: Vec<Felt>) -> Result<Vec<Felt>, AggregateErro
         }
         Err(e) => {
             println!("Contract call failed: {:?}", e);
-            return Err(AggregateError::ContractCall(format!(
+            return Err(CallError::ContractCall(format!(
                 "Contract call failed: {:?}",
                 e
             )));
@@ -278,7 +265,7 @@ async fn multicall_contract(calls: Vec<Felt>) -> Result<Vec<Felt>, AggregateErro
     Ok(call_result)
 }
 
-pub async fn get_balance(contract_address: &str, account: &str) -> Result<String, AggregateError> {
+pub async fn get_balance(contract_address: &str, account: &str) -> Result<String, CallError> {
     println!("In get balance");
     let provider = get_provider().unwrap();
     // Make contract call with error handling
@@ -286,7 +273,7 @@ pub async fn get_balance(contract_address: &str, account: &str) -> Result<String
         .call(
             FunctionCall {
                 contract_address: Felt::from_hex(contract_address)
-                    .map_err(|e| AggregateError::ContractCall(format!("Invalid address: {}", e)))?,
+                    .map_err(|e| CallError::ContractCall(format!("Invalid address: {}", e)))?,
                 entry_point_selector: selector!("balance_of"),
                 calldata: vec![Felt::from_hex_unchecked(account)],
             },
@@ -300,7 +287,7 @@ pub async fn get_balance(contract_address: &str, account: &str) -> Result<String
         }
         Err(e) => {
             println!("Contract call failed: {:?}", e);
-            return Err(AggregateError::ContractCall(format!(
+            return Err(CallError::ContractCall(format!(
                 "Contract call failed: {:?}",
                 e
             )));

@@ -21,7 +21,7 @@ pub fn generate_broadcast_event(event_data: MemecoinInfo) -> String {
         team_allocation: format_percentage(calculate_team_allocation(
             event_data.total_supply,
             event_data.team_allocation,
-        )),
+        ).unwrap()),
     };
 
     format!(
@@ -81,7 +81,7 @@ pub fn create_launch_keyboard(
 }
 
 pub async fn handle_spot_command(wallet_address: String, token_address: String, dex_url: &str) -> String {
-    if !is_valid_starknet_address(&wallet_address) || !is_valid_starknet_address(&token_address) {
+    if !is_valid_starknet_address(&wallet_address).unwrap() || !is_valid_starknet_address(&token_address).unwrap() {
         "❌ Malformed address".to_string()
     } else {
         match get_account_holding_info(&wallet_address, &token_address).await {
@@ -121,7 +121,7 @@ pub async fn handle_spot_command(wallet_address: String, token_address: String, 
 }
 
 pub async fn handle_peek_command(wallet_address: String) -> String {
-    if !is_valid_starknet_address(&wallet_address) {
+    if !is_valid_starknet_address(&wallet_address).unwrap() {
         let error_message = format!("malformed address");
         error_message
     } else {
@@ -149,7 +149,7 @@ pub async fn handle_peek_command(wallet_address: String) -> String {
 }
 
 pub async fn handle_sniq_command(token_address: String, dex_url: &str, explorer_url: &str) -> String {
-    if !is_valid_starknet_address(&token_address) {
+    if !is_valid_starknet_address(&token_address).unwrap() {
         let error_message = format!("malformed address");
         error_message
     } else {

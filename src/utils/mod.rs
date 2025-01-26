@@ -4,3 +4,5 @@ pub mod types;
 // pub mod liquidity;
 pub mod info_aggregator;
 pub mod market_cap;
+
+pub mod error;

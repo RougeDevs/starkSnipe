@@ -1,33 +1,32 @@
 use regex::Regex;
 use serde_json::json;
 
-pub fn is_valid_starknet_address(address: &str) -> bool {
-    let re = Regex::new(r"^0x[0-9a-fA-F]{50,64}$").unwrap();
-    re.is_match(address)
+use crate::utils::error::UtilityError;
+pub fn is_valid_starknet_address(address: &str) -> Result<bool, UtilityError> {
+    let re = Regex::new(r"^0x[0-9a-fA-F]{50,64}$").map_err(|_| UtilityError::InvalidAddress)?;
+    Ok(re.is_match(address))
 }
 
 pub fn calculate_team_allocation(
     total_supply: String,
     total_team_allocation: String,
-) -> std::string::String {
-    let parsed_total_supply = format_large_number(&total_supply)
-        .unwrap()
+) -> Result<std::string::String, UtilityError> {
+    let parsed_total_supply = format_large_number(&total_supply)?
         .parse::<f64>()
-        .unwrap();
-    let parsed_team_allocation = format_large_number(&total_team_allocation)
-        .unwrap()
+        .map_err(|_| UtilityError::FormattingError("Total supply parsing failed".to_string()))?;
+    let parsed_team_allocation = format_large_number(&total_team_allocation)?
         .parse::<f64>()
-        .unwrap();
+        .map_err(|_| UtilityError::FormattingError("Team allocation parsing failed".to_string()))?;
 
     let percentage_team_allocation = (parsed_team_allocation * 100.0) / parsed_total_supply;
 
-    format!("{:.2}", percentage_team_allocation)
+    Ok(format!("{:.2}", percentage_team_allocation))
 }
 
-pub fn format_large_number(input: &str) -> Result<String, &'static str> {
+pub fn format_large_number(input: &str) -> Result<String, UtilityError> {
     // Validate input is numeric
     if !input.chars().all(|c| c.is_digit(10)) {
-        return Err("Invalid input: must contain only digits");
+        return Err(UtilityError::InvalidInput("Must contain only digits".to_string()));
     }
 
     let input_len = input.len();
@@ -87,11 +86,11 @@ pub fn format_short_address(address: &str) -> String {
     }
 }
 
-pub fn format_number(num_str: &str) -> Result<String, &'static str> {
+pub fn format_number(num_str: &str) -> Result<String, UtilityError> {
     // Parse the string to f64
     let num = match num_str.parse::<f64>() {
         Ok(n) => n,
-        Err(_) => return Err("Invalid number format"),
+        Err(_) => return Err(UtilityError::InvalidInput("Invalid number format".to_string())),
     };
 
     // Define the thresholds and their corresponding suffixes
@@ -130,8 +129,6 @@ pub fn format_percentage(value_str: String) -> String {
             format!("{:.1}", value)
         }
         Err(_) => {
-            // If parsing fails, return the original string
-            // You might want to log this error in a production environment
             eprintln!("Failed to parse percentage string: {}", value_str);
             value_str
         }
